@@ -9,17 +9,20 @@ param adminUsername string
 @secure()
 param adminPublicKey string
 
+@description('Environment (dev, test, prod).')
+param environment string = 'dev'
+
 @description('Name of the Virtual Machine.')
-param vmName string = 'sirtunnel-vm'
+param vmName string = 'vm-sirtunnel-${environment}'
 
 @description('Size for the Virtual Machine.')
 param vmSize string = 'Standard_B1s'
 
 @description('Name of the Virtual Network.')
-param vnetName string = 'sirtunnel-vnet'
+param vnetName string = 'vnet-sirtunnel-${environment}'
 
 @description('Name of the Subnet.')
-param subnetName string = 'sirtunnel-subnet'
+param subnetName string = 'snet-sirtunnel-${environment}'
 
 @description('Name of the existing Azure DNS Zone (e.g., title.dev).')
 param dnsZoneName string
@@ -33,9 +36,9 @@ param staticPipName string
 @description('Resource Group name where the existing Static Public IP Address resides.')
 param staticPipResourceGroupName string
 
-var networkInterfaceName = '${vmName}-nic'
-var networkSecurityGroupName = '${vmName}-nsg'
-var dnsZoneContributorRoleId = 'befefa01-2a29-4197-83a8-272ff33ce314' // Built-in DNS Zone Contributor Role ID
+var networkInterfaceName = 'nic-sirtunnel-${environment}'
+var networkSecurityGroupName = 'nsg-sirtunnel-${environment}'
+var osDiskName = 'osdisk-sirtunnel-${environment}'
 
 // --- Reference Existing Resources ---
 resource staticPip 'Microsoft.Network/publicIPAddresses@2023-11-01' existing = {
@@ -167,6 +170,7 @@ resource virtualMachine 'Microsoft.Compute/virtualMachines@2024-03-01' = {
         version: 'latest'
       }
       osDisk: {
+        name: osDiskName
         createOption: 'FromImage'
         managedDisk: {
           storageAccountType: 'Standard_LRS'
@@ -184,21 +188,20 @@ resource virtualMachine 'Microsoft.Compute/virtualMachines@2024-03-01' = {
   }
 }
 
-// --- Role Assignment for Managed Identity ---
-resource assignDnsRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(resourceGroup().id, virtualMachine.id, dnsZone.id)
-  scope: dnsZone // Scope to the existing DNS zone
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', dnsZoneContributorRoleId)
+// --- Role Assignment for Managed Identity (via module) ---
+module dnsRoleAssignment 'modules/dns-role-assignment.bicep' = {
+  name: 'dnsRoleAssignment'
+  scope: resourceGroup(dnsZoneResourceGroupName)
+  params: {
     principalId: virtualMachine.identity.principalId
-    principalType: 'ServicePrincipal'
+    dnsZoneId: dnsZone.id
   }
 }
 
 // --- VM Extension for Setup ---
 resource vmExtension 'Microsoft.Compute/virtualMachines/extensions@2024-03-01' = {
   parent: virtualMachine
-  name: 'installSirtunnelCaddy'
+  name: 'install-sirtunnel-caddy'
   location: location
   properties: {
     publisher: 'Microsoft.Azure.Extensions'
