@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "WestUS3"
+    },
+    "adminUsername": {
+      "value": "azureuser"
+    },
+    "vmName": {
+      "value": "sirtunnel-vm-prod"
+    },
+    "vmSize": {
+      "value": "Standard_B1s"
+    },
+    "vnetName": {
+      "value": "sirtunnel-vnet-prod"
+    },
+    "subnetName": {
+      "value": "sirtunnel-subnet-prod"
+    },
+    "dnsZoneName": {
+      "value": "title.dev"
+    },
+    "dnsZoneResourceGroupName": {
+      "value": "my-dns-rg"
+    },
+    "staticPipName": {
+      "value": "sirtunnel-pip-prod"
+    },
+    "staticPipResourceGroupName": {
+      "value": "sirtunnel-pip-rg"
+    }
+  }
+}
