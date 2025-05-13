@@ -1,80 +1,93 @@
 #!/bin/bash
 set -e
-set -x # Enable command tracing
+set -x  # Enable verbose tracing for debugging
 
-# Variables
-caddyVersion=2.1.1
+# Constants
+caddyVersion="2.1.1"
 caddyGz="caddy_${caddyVersion}_linux_amd64.tar.gz"
 sirtunnel_app_dir="/opt/sirtunnel"
 caddy_config_dir="/etc/caddy"
+run_script="${sirtunnel_app_dir}/run_server.sh"
+service_file="/etc/systemd/system/sirtunnel.service"
 
-echo "[*] SirTunnel Setup Script"
+echo "[*] Starting SirTunnel Setup Script"
 
-# Ensure script is run as root
+# 1. Require root privileges
 if [ "$(id -u)" -ne 0 ]; then
-  echo "[!] This script must be run as root. Aborting." >&2
+  echo "[!] Must be run as root." >&2
   exit 1
 fi
 
+# 2. Prepare directories
 echo "[*] Creating application and configuration directories..."
-mkdir -p "${sirtunnel_app_dir}"
-mkdir -p "${caddy_config_dir}"
+mkdir -p "$sirtunnel_app_dir"
+mkdir -p "$caddy_config_dir"
 
-# --- Caddy Installation ---
-echo "[*] Downloading Caddy v${caddyVersion}..."
-curl -s -O -L "https://github.com/caddyserver/caddy/releases/download/v${caddyVersion}/${caddyGz}"
-tar xf "${caddyGz}"
-
-echo "[*] Cleaning up Caddy archive and license files..."
-rm -f "${caddyGz}" LICENSE README.md
-
-echo "[*] Moving Caddy binary to /usr/local/bin/..."
+# 3. Install Caddy binary
+echo "[*] Installing Caddy v${caddyVersion}..."
+curl -sSL -O "https://github.com/caddyserver/caddy/releases/download/v${caddyVersion}/${caddyGz}"
+tar -xf "$caddyGz"
+rm -f "$caddyGz" LICENSE README.md
 mv caddy /usr/local/bin/
 chmod +x /usr/local/bin/caddy
-
-echo "[*] Enabling Caddy to bind to low ports..."
 setcap 'cap_net_bind_service=+ep' /usr/local/bin/caddy
 
-# --- Application Script and Config Deployment ---
-echo "[*] Moving application scripts and Caddy config to their persistent locations..."
-
-echo "[DEBUG] Listing files in current directory (pwd: $(pwd)) before moving:"
-ls -la ./
-echo "[DEBUG] Content of ./run_server.sh before move:"
-cat ./run_server.sh || echo "[DEBUG] ./run_server.sh not found or cat failed"
-
+# 4. Move application scripts
+echo "[*] Deploying scripts..."
 if [ -f "./run_server.sh" ]; then
-    mv ./run_server.sh "${sirtunnel_app_dir}/run_server.sh"
-    chmod +x "${sirtunnel_app_dir}/run_server.sh"
-    echo "    - Moved run_server.sh to ${sirtunnel_app_dir} and made executable."
-    echo "[DEBUG] Content of ${sirtunnel_app_dir}/run_server.sh after move:"
-    cat "${sirtunnel_app_dir}/run_server.sh" || echo "[DEBUG] cat ${sirtunnel_app_dir}/run_server.sh failed"
+  mv ./run_server.sh "$run_script"
+  chmod +x "$run_script"
 else
-    echo "[!] run_server.sh not found in current directory. Skipping." >&2
+  echo "[!] Missing run_server.sh" >&2
+  exit 2
 fi
 
 if [ -f "./sirtunnel.py" ]; then
-    mv ./sirtunnel.py "${sirtunnel_app_dir}/sirtunnel.py"
-    chmod +x "${sirtunnel_app_dir}/sirtunnel.py"
-    echo "    - Moved sirtunnel.py to ${sirtunnel_app_dir} and made executable."
-    echo "[DEBUG] Content of ${sirtunnel_app_dir}/sirtunnel.py after move:"
-    cat "${sirtunnel_app_dir}/sirtunnel.py" || echo "[DEBUG] cat ${sirtunnel_app_dir}/sirtunnel.py failed"
+  mv ./sirtunnel.py "${sirtunnel_app_dir}/sirtunnel.py"
+  chmod +x "${sirtunnel_app_dir}/sirtunnel.py"
 else
-    echo "[!] sirtunnel.py not found in current directory. Skipping." >&2
+  echo "[!] Missing sirtunnel.py" >&2
+  exit 3
 fi
 
 if [ -f "./caddy_config.json" ]; then
-    mv ./caddy_config.json "${caddy_config_dir}/caddy_config.json"
-    echo "    - Moved caddy_config.json to ${caddy_config_dir}."
-    echo "[DEBUG] Content of ${caddy_config_dir}/caddy_config.json after move:"
-    cat "${caddy_config_dir}/caddy_config.json" || echo "[DEBUG] cat ${caddy_config_dir}/caddy_config.json failed"
+  mv ./caddy_config.json "${caddy_config_dir}/caddy_config.json"
 else
-    echo "[!] caddy_config.json not found in current directory. Caddy might not start correctly." >&2
+  echo "[!] Missing caddy_config.json. Caddy may fail to start." >&2
 fi
 
-# Ensure HOME is defined (required for Caddy's config resolution, especially for TLS)
+# 5. Set environment for Caddy (in case TLS resolution needs HOME)
 export HOME=/root
-echo "[*] Set HOME to /root for Caddy."
 
-echo "[*] Installation script finished."
-echo "[DEBUG] install.sh finished. About to attempt execution of /opt/sirtunnel/run_server.sh via Bicep command."
+# 6. Create systemd service to run the tunnel in background
+echo "[*] Creating systemd service for sirtunnel..."
+
+cat > "$service_file" <<EOF
+[Unit]
+Description=SirTunnel Proxy Service
+After=network.target
+
+[Service]
+ExecStart=$run_script
+Restart=on-failure
+User=root
+WorkingDirectory=$sirtunnel_app_dir
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 7. Enable and start the service
+echo "[*] Enabling and starting sirtunnel..."
+systemctl daemon-reexec
+systemctl daemon-reload
+systemctl enable sirtunnel.service
+systemctl start sirtunnel.service
+
+# 8. Check service status (optional: can be removed to avoid failing the script)
+echo "[*] Verifying sirtunnel service status..."
+systemctl status sirtunnel.service --no-pager || true
+
+# 9. Final log and exit
+echo "[*] SirTunnel setup completed. Service should be running in background."
+exit 0
