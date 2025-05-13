@@ -670,26 +670,39 @@ try {
               if ($LASTEXITCODE -eq 0) {
                 # Installation succeeded
                 Write-Host "✓ Bicep successfully installed" -ForegroundColor Green
-                Write-Progress -Id 1 -Activity "Bicep Validation" -Status "Bicep installation successful" -PercentComplete 75
+                $bicepInstalled = $true # Ensure this is set immediately after successful install
+                Write-Progress -Id 1 -Activity "Bicep Validation" -Status "Bicep installation successful. Verifying version..." -PercentComplete 75
                 
-                # Get the installed version with error handling
+                # Attempt to get the installed version
                 try {
                     Write-Progress -Id 1 -Activity "Bicep Validation" -Status "Getting installed Bicep version..." -PercentComplete 85
-                    $bicepVersionCmd = az bicep version --only-show-errors 2>$null
+                    $bicepVersionCmdOutput = az bicep version --only-show-errors 2>$null
                     if ($LASTEXITCODE -eq 0) {
-                        try {                            $bicepVersion = $bicepVersionCmd | ConvertFrom-Json -ErrorAction Stop
-                            Write-Host "✓ Bicep version: $($bicepVersion.version)" -ForegroundColor Green
-                            Write-Progress -Id 1 -Activity "Bicep Validation" -Status "Bicep version: $($bicepVersion.version)" -PercentComplete 100
+                        # Version command succeeded, try to parse
+                        try {
+                            $bicepVersionObj = $bicepVersionCmdOutput | ConvertFrom-Json -ErrorAction Stop
+                            Write-Host "  Installed Bicep version: $($bicepVersionObj.version)" -ForegroundColor Green
+                            Write-Progress -Id 1 -Activity "Bicep Validation" -Status "Bicep version: $($bicepVersionObj.version)" -PercentComplete 100
+                        } catch {
+                            # Not JSON, try regex
+                            if ($bicepVersionCmdOutput -match '\d+\.\d+\.\d+') {
+                                Write-Host "  Installed Bicep version: $bicepVersionCmdOutput" -ForegroundColor Green
+                                Write-Progress -Id 1 -Activity "Bicep Validation" -Status "Bicep version: $bicepVersionCmdOutput" -PercentComplete 100
+                            } else {
+                                # Neither JSON nor recognizable string
+                                Write-Host "  Bicep version retrieved, but format is unexpected: '$bicepVersionCmdOutput'" -ForegroundColor Yellow
+                                Write-Progress -Id 1 -Activity "Bicep Validation" -Status "Bicep version format unknown" -PercentComplete 100
+                            }
                         }
-                        catch {
-                            Write-Host "✓ Bicep has been installed (version info not available)" -ForegroundColor Green
-                            Write-Progress -Id 1 -Activity "Bicep Validation" -Status "Bicep installed (version unknown)" -PercentComplete 100
-                        }
+                    } else {
+                        # az bicep version command failed
+                        Write-Host "  Could not retrieve Bicep version after installation (version command failed). Bicep should still be functional." -ForegroundColor Yellow
+                        Write-Progress -Id 1 -Activity "Bicep Validation" -Status "Bicep version check command failed" -PercentComplete 100
                     }
-                }
-                catch {
-                    Write-Host "✓ Bicep has been installed (version check failed)" -ForegroundColor Green
-                    Write-Progress -Id 1 -Activity "Bicep Validation" -Status "Bicep installed (version check failed)" -PercentComplete 100
+                } catch {
+                    # Exception during the version retrieval/parsing logic
+                    Write-Host "  An error occurred while trying to retrieve Bicep version: $($_.Exception.Message)" -ForegroundColor Yellow
+                    Write-Progress -Id 1 -Activity "Bicep Validation" -Status "Exception during Bicep version check" -PercentComplete 100
                 }
             }
             else {
