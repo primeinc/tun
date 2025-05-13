@@ -215,7 +215,7 @@ resource vmExtension 'Microsoft.Compute/virtualMachines/extensions@2024-03-01' =
       fileUris: [
         'https://raw.githubusercontent.com/${githubRepo}/main/scripts/install.sh'
       ]
-      commandToExecute: 'bash install.sh ${subscription().subscriptionId} ${dnsZoneResourceGroupName}'
+      commandToExecute: 'bash install.sh ${subscription().subscriptionId} ${dnsZoneResourceGroupName} ${dnsZoneName}'
     }
   }
 }

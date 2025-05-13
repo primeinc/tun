@@ -90,11 +90,10 @@ class SirTunnel:
                 }]
             }]
         }
-        
-        self.route_id = route_config["@id"]
+          self.route_id = route_config["@id"]
         
         # Path to add a new route to the server
-        path = "/config/apps/http/servers/srv0/routes"
+        path = "/config/apps/http/servers/sirtunnel/routes"
         
         try:
             logger.info(f"Adding route for {self.domain} -> localhost:{self.local_port}")

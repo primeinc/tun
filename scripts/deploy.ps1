@@ -11,7 +11,7 @@ if (Test-Path $configFile) {
 
 # Check if required variables are set
 $requiredVars = @('LOCATION', 'VM_RG_NAME', 'ADMIN_USER', 'SSH_PUB_KEY_PATH', 
-                 'DNS_ZONE_NAME', 'DNS_ZONE_RG', 'STATIC_PIP_NAME', 'STATIC_PIP_RG', 'STACK_NAME')
+                 'DNS_ZONE_NAME', 'DNS_ZONE_RG', 'STATIC_PIP_NAME', 'STATIC_PIP_RG', 'STACK_NAME', 'GITHUB_REPO')
 
 foreach ($var in $requiredVars) {
     if (-not (Get-Variable -Name $var -ErrorAction SilentlyContinue)) {
@@ -54,6 +54,7 @@ az stack group create `
         dnsZoneResourceGroupName=$DNS_ZONE_RG `
         staticPipName=$STATIC_PIP_NAME `
         staticPipResourceGroupName=$STATIC_PIP_RG `
+        githubRepo=$GITHUB_REPO `
     --action-on-unmanage deleteResources `
     --deny-settings-mode none
 
@@ -63,7 +64,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Get deployment outputs
-$outputs = az stack group show --name $STACK_NAME --resource-group $VM_RG_NAME --query "properties.outputs" | ConvertFrom-Json
+$outputs = az stack group show --name $STACK_NAME --resource-group $VM_RG_NAME --query "outputs" | ConvertFrom-Json
 
 # Display useful information
 Write-Host "`nDeployment completed successfully!`n" -ForegroundColor Green

@@ -4,10 +4,12 @@ set -e # Exit immediately if a command exits with a non-zero status.
 # Script arguments passed from Bicep VM Extension
 AZURE_SUBSCRIPTION_ID="$1"
 AZURE_RESOURCE_GROUP_NAME="$2" # DNS Zone RG Name
+DNS_ZONE_NAME="$3" # DNS Zone Name
 
 echo "Starting Caddy and SirTunnel installation..."
 echo "Azure Subscription ID: ${AZURE_SUBSCRIPTION_ID}"
 echo "Azure DNS Zone Resource Group: ${AZURE_RESOURCE_GROUP_NAME}"
+echo "DNS Zone Name: ${DNS_ZONE_NAME}"
 
 # Update package list and install dependencies
 echo "Updating packages and installing dependencies..."
@@ -47,9 +49,24 @@ fi
 
 # Install SirTunnel script
 echo "Installing SirTunnel script..."
-SIRTUNNEL_URL="https://raw.githubusercontent.com/anderspitman/SirTunnel/master/sirtunnel.py"
-sudo wget -O /usr/local/bin/sirtunnel.py "$SIRTUNNEL_URL"
+# Use the SirTunnel script from the same repository
+SIRTUNNEL_URL="https://raw.githubusercontent.com/primeinc/tun/main/scripts/sirtunnel.py"
+# Fallback to the original version if our enhanced version is not available
+SIRTUNNEL_FALLBACK_URL="https://raw.githubusercontent.com/anderspitman/SirTunnel/master/sirtunnel.py"
+echo "Downloading SirTunnel script from ${SIRTUNNEL_URL}..."
+if ! sudo wget -O /usr/local/bin/sirtunnel.py "$SIRTUNNEL_URL"; then
+    echo "Failed to download from primary source. Using fallback URL..."
+    sudo wget -O /usr/local/bin/sirtunnel.py "$SIRTUNNEL_FALLBACK_URL"
+fi
 sudo chmod +x /usr/local/bin/sirtunnel.py
+sudo ln -sf /usr/local/bin/sirtunnel.py /usr/local/bin/sirtunnel
+
+# Verify server name in SirTunnel script
+echo "Verifying Caddy server name in SirTunnel script..."
+if grep -q "servers/srv0/routes" /usr/local/bin/sirtunnel.py; then
+    echo "Updating server name in SirTunnel script from 'srv0' to 'sirtunnel'..."
+    sudo sed -i 's|servers/srv0/routes|servers/sirtunnel/routes|g' /usr/local/bin/sirtunnel.py
+fi
 
 # Configure Caddy initial state via Admin API
 echo "Configuring Caddy initial state via API..."
@@ -68,7 +85,7 @@ CADDY_CONFIG_JSON=$(cat <<EOF
   "apps": {
     "http": {
       "servers": {
-        "srv0": {
+        "sirtunnel": {
           "listen": [":443"],
           "routes": []
         }
@@ -78,7 +95,7 @@ CADDY_CONFIG_JSON=$(cat <<EOF
       "automation": {
         "policies": [
           {
-            "subjects": ["*.tun.title.dev"],
+            "subjects": ["*.tun.$3"],
             "issuer": {
               "module": "acme"
             },
