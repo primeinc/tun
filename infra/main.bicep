@@ -211,13 +211,18 @@ resource vmExtension 'Microsoft.Compute/virtualMachines/extensions@2024-03-01' =
     type: 'CustomScript'
     typeHandlerVersion: '2.1'
     autoUpgradeMinorVersion: true
+    protectedSettings: {
+      commandToExecute: 'bash install.sh ${subscription().subscriptionId} ${dnsZoneResourceGroupName} ${dnsZoneName}'
+    }
     settings: {
       fileUris: [
         'https://raw.githubusercontent.com/${githubRepo}/main/scripts/install.sh'
       ]
-      commandToExecute: 'bash install.sh ${subscription().subscriptionId} ${dnsZoneResourceGroupName} ${dnsZoneName}'
     }
   }
+  dependsOn: [
+    dnsRoleAssignment
+  ]
 }
 
 // --- Outputs ---
