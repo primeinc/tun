@@ -109,6 +109,35 @@ This document provides solutions for common issues encountered when using SirTun
 - Try deleting resources manually
 - Verify the `--action-on-unmanage deleteResources` flag is used when deleting the stack
 
+### "DeploymentStackInNonTerminalState" Error During Cleanup
+
+**Problem:** The `deploy.ps1` script (or manual `az stack group delete`) fails with an error similar to "DeploymentStackInNonTerminalState" or "Operation Canceled". This typically means the underlying ARM deployment for the stack is still active or in a state that prevents immediate deletion (e.g., 'Deploying', 'Provisioning', 'Canceling', or certain 'Failed' states).
+
+**Automated Script Handling:**
+- The `deploy.ps1` script attempts to handle this automatically when you choose to delete a stack that is in a 'Deploying' or 'Provisioning' state.
+- It will first try to find and cancel the active underlying ARM deployment associated with the stack.
+- It waits for a short period after attempting cancellation before trying to delete the stack again.
+
+**Manual Steps (if automated handling fails or for other non-terminal states):**
+1.  **Identify the Active Deployment:**
+    *   Go to the Azure portal, navigate to your resource group (`$VM_RG_NAME`).
+    *   In the "Deployments" section, find the deployment related to your stack (often named similarly to the stack, e.g., `<STACK_NAME>_....`). Look for deployments with a status of 'Running', 'Deploying', 'Provisioning', 'Canceling', or a recent 'Failed' state that might be blocking the stack deletion.
+    *   Note the **Name** of this active or problematic deployment.
+2.  **Cancel the Active Deployment via Azure CLI:**
+    ```bash
+    az deployment group cancel --resource-group YOUR_RESOURCE_GROUP_NAME --name ACTIVE_DEPLOYMENT_NAME_FROM_PORTAL
+    ```
+    Replace `YOUR_RESOURCE_GROUP_NAME` and `ACTIVE_DEPLOYMENT_NAME_FROM_PORTAL` with the correct values.
+3.  **Wait and Retry Stack Deletion:**
+    *   Wait a few minutes for the cancellation to complete. You can check its status in the Azure portal.
+    *   Once the underlying deployment is no longer in an active or problematic state (e.g., it shows 'Canceled' or 'Failed' in a way that's not blocking), try deleting the stack again using the `deploy.ps1` script or manually:
+        ```bash
+        az stack group delete --name YOUR_STACK_NAME --resource-group YOUR_RESOURCE_GROUP_NAME --yes --action-on-unmanage deleteResources
+        ```
+4.  **Persistent Issues:**
+    *   If the deployment refuses to cancel or the stack still won't delete, there might be a resource lock or an Azure platform issue. Check for any resource locks on the resources or resource group.
+    *   You may need to wait longer or, in rare cases, contact Azure support.
+
 ## Getting Help
 
 If you continue to experience issues:
