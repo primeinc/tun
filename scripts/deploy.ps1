@@ -54,7 +54,7 @@ az stack group create `
         dnsZoneResourceGroupName=$DNS_ZONE_RG `
         staticPipName=$STATIC_PIP_NAME `
         staticPipResourceGroupName=$STATIC_PIP_RG `
-    --action-on-unmanage resources=delete `
+    --action-on-unmanage deleteResources `
     --deny-settings-mode none
 
 if ($LASTEXITCODE -ne 0) {

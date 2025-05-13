@@ -50,19 +50,51 @@ if (Test-Path $SSH_PUB_KEY_PATH) {
 
 # Check if static public IP exists
 try {
-    $pip = az network public-ip show --name $STATIC_PIP_NAME --resource-group $STATIC_PIP_RG | ConvertFrom-Json
-    Write-Host "✓ Static Public IP found: $STATIC_PIP_NAME (IP: $($pip.ipAddress))" -ForegroundColor Green
+    # Attempt to get the public IP. Suppress az cli error stream and handle ConvertFrom-Json errors silently for now.
+    $pip = az network public-ip show --name $STATIC_PIP_NAME --resource-group $STATIC_PIP_RG 2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue
+
+    # Check if $pip is valid and has the necessary properties
+    if (($null -ne $pip) -and `
+        ($null -ne $pip.GetType().GetProperty('name')) -and `
+        ($null -ne $pip.GetType().GetProperty('ipAddress')) -and `
+        ($null -ne $pip.GetType().GetProperty('sku')) -and ($null -ne $pip.sku) -and `
+        ($null -ne $pip.sku.GetType().GetProperty('name')) ) {
+        Write-Host "✓ Static Public IP found: $($pip.name) (IP: $($pip.ipAddress))" -ForegroundColor Green
     
-    # Check if it's Standard SKU
-    if ($pip.sku.name -ne "Standard") {
-        Write-Host "✗ Public IP is not Standard SKU. Current: $($pip.sku.name)" -ForegroundColor Red
-        Write-Host "  Standard SKU is required for this deployment." -ForegroundColor Yellow
+        # Check if it's Standard SKU
+        if ($pip.sku.name -ne "Standard") {
+            Write-Host "✗ Public IP '$($pip.name)' is not Standard SKU. Current SKU: $($pip.sku.name)" -ForegroundColor Red
+            Write-Host "  Standard SKU is required for this deployment." -ForegroundColor Yellow
+            Write-Host "  Example command to create (or delete and recreate with Standard SKU):" -ForegroundColor Yellow
+            Write-Host "  az network public-ip create --name $STATIC_PIP_NAME --resource-group $STATIC_PIP_RG --sku Standard --allocation-method Static" -ForegroundColor Yellow
+            exit 1
+        }
+    } else {
+        # $pip is null or invalid. This means 'az network public-ip show' likely failed or returned non-JSON.
+        Write-Host "✗ Could not retrieve valid details for Static Public IP '$($STATIC_PIP_NAME)' in resource group '$($STATIC_PIP_RG)'." -ForegroundColor Red
+        
+        # Check if resource group exists to provide a more specific message
+        az group show --name $STATIC_PIP_RG --output none 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  The resource group '$($STATIC_PIP_RG)' was not found." -ForegroundColor Yellow
+            Write-Host "  Please create the resource group first:" -ForegroundColor Yellow
+            Write-Host "  az group create --name $STATIC_PIP_RG --location <your-desired-location>" -ForegroundColor Yellow
+        } else {
+            Write-Host "  The resource group '$($STATIC_PIP_RG)' exists, but the Public IP '$($STATIC_PIP_NAME)' might be missing or misconfigured." -ForegroundColor Yellow
+        }
+        Write-Host "  Please ensure the Public IP exists and is a Standard SKU static IP." -ForegroundColor Yellow
+        Write-Host "  Example command to create Public IP:" -ForegroundColor Yellow
+        Write-Host "  az network public-ip create --name $STATIC_PIP_NAME --resource-group $STATIC_PIP_RG --sku Standard --allocation-method Static" -ForegroundColor Yellow
         exit 1
     }
 } catch {
-    Write-Host "✗ Static Public IP not found: $STATIC_PIP_NAME in resource group $STATIC_PIP_RG" -ForegroundColor Red
-    Write-Host "  Please create a Standard SKU static Public IP before proceeding." -ForegroundColor Yellow
-    Write-Host "  Example command:" -ForegroundColor Yellow
+    # This catch block handles other unexpected PowerShell errors
+    Write-Host "✗ An unexpected script error occurred while checking Static Public IP '$($STATIC_PIP_NAME)'." -ForegroundColor Red
+    Write-Host "  Error details: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "  Please ensure the resource group '$($STATIC_PIP_RG)' exists and the Public IP '$($STATIC_PIP_NAME)' is a Standard SKU static IP." -ForegroundColor Yellow
+    Write-Host "  Example command to create resource group:" -ForegroundColor Yellow
+    Write-Host "  az group create --name $STATIC_PIP_RG --location <your-desired-location>" -ForegroundColor Yellow
+    Write-Host "  Example command to create public IP:" -ForegroundColor Yellow
     Write-Host "  az network public-ip create --name $STATIC_PIP_NAME --resource-group $STATIC_PIP_RG --sku Standard --allocation-method Static" -ForegroundColor Yellow
     exit 1
 }

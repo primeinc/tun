@@ -12,6 +12,9 @@ param adminPublicKey string
 @description('Environment (dev, test, prod).')
 param environment string = 'dev'
 
+@description('GitHub repository in the format owner/repo for sourcing the install.sh script. Example: "yourusername/yourrepository"')
+param githubRepo string
+
 @description('Name of the Virtual Machine.')
 param vmName string = 'vm-sirtunnel-${environment}'
 
@@ -216,9 +219,6 @@ resource vmExtension 'Microsoft.Compute/virtualMachines/extensions@2024-03-01' =
     }
   }
 }
-
-// GitHub repository variable for install script URL
-var githubRepo = 'YOUR_USERNAME/YOUR_REPO'  // REPLACE with your actual GitHub username/repo
 
 // --- Outputs ---
 output publicIPAddress string = staticPip.properties.ipAddress

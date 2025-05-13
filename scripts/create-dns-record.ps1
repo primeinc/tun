@@ -66,7 +66,7 @@ if ($recordExists) {
             --zone-name $DNS_ZONE_NAME `
             --record-set-name "*.tun" `
             --ipv4-address $ip `
-            --ttl 3600
+            --ttl 60
         
         Write-Host "Updated DNS record: *.tun.$DNS_ZONE_NAME now points to $ip" -ForegroundColor Green
     } else {
@@ -80,7 +80,7 @@ if ($recordExists) {
         --resource-group $DNS_ZONE_RG `
         --zone-name $DNS_ZONE_NAME `
         --name "*.tun" `
-        --ttl 3600
+        --ttl 60
     
     az network dns record-set a add-record `
         --resource-group $DNS_ZONE_RG `
