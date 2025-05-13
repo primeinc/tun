@@ -214,10 +214,10 @@ resource vmExtension 'Microsoft.Compute/virtualMachines/extensions@2024-03-01' =
     settings: {
       skipDos2Unix: false
       fileUris: [
-        'https://raw.githubusercontent.com/${githubRepo}/main/scripts/install.sh?testv6'
-        'https://raw.githubusercontent.com/${githubRepo}/main/scripts/run_server.sh?testv6'
-        'https://raw.githubusercontent.com/${githubRepo}/main/scripts/caddy_config.json?testv6'
-        'https://raw.githubusercontent.com/${githubRepo}/main/scripts/sirtunnel.py?testv6' // Added sirtunnel.py
+        'https://raw.githubusercontent.com/${githubRepo}/main/scripts/install.sh?testv7'
+        'https://raw.githubusercontent.com/${githubRepo}/main/scripts/run_server.sh?testv7'
+        'https://raw.githubusercontent.com/${githubRepo}/main/scripts/caddy_config.json?testv7'
+        'https://raw.githubusercontent.com/${githubRepo}/main/scripts/sirtunnel.py?testv7'
       ]
     }
     protectedSettings: {

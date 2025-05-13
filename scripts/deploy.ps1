@@ -68,146 +68,112 @@ if ($azExitCode -eq 0) {
 if ($azExitCode -eq 0 -and $stackStatus) { # True if 'az stack show' succeeded AND we got a non-null stackStatus
     Write-Host "Current stack status: $stackStatus"
 
-    # Combine handling for 'Deploying', 'Provisioning', and various 'Failed'/'Stuck' states
-    if ($stackStatus -eq 'Deploying' -or `
-        $stackStatus -eq 'Provisioning' -or `
-        $stackStatus -eq 'Failed' -or `
-        $stackStatus -eq 'DeletingFailed' -or `
-        $stackStatus -eq 'Cancelling' -or `
-        $stackStatus -eq 'CreateFailed' -or `
-        $stackStatus -eq 'UpdateFailed') {
-
-        $warningMessage = ""
-        if ($stackStatus -eq 'Deploying' -or $stackStatus -eq 'Provisioning') {
-            $warningMessage = "The deployment stack '$STACK_NAME' is currently in '$stackStatus' state. Azure is actively working on it."
-        } else { # Covers Failed, DeletingFailed, Cancelling, CreateFailed, UpdateFailed
-            $warningMessage = "The deployment stack '$STACK_NAME' is in a non-terminal/failed state: '$stackStatus'."
-        }
-        Write-Warning $warningMessage
-        
-        $confirmation = Read-Host "Do you want to attempt to delete the existing stack '$STACK_NAME' and proceed with a new deployment? (y/n) (Choosing 'n' will abort)"
+    if ($stackStatus -eq 'Deploying' -or $stackStatus -eq 'Provisioning') {
+        Write-Warning "The deployment stack '$STACK_NAME' is currently in '$stackStatus' state. Azure is actively working on it."
+        $confirmation = Read-Host "This stack is actively being modified by Azure. Do you want to attempt to cancel this operation and then update the stack? (y/n) (Choosing 'n' will abort)"
         if ($confirmation -eq 'y') {
+            Write-Warning "Attempting to cancel the active underlying deployment for stack '$STACK_NAME'..."
             
-            # Attempt to cancel underlying deployment if stack is 'Deploying' or 'Provisioning'
-            if ($stackStatus -eq 'Deploying' -or $stackStatus -eq 'Provisioning') {
-                Write-Warning "Stack is in '$stackStatus' state. Attempting to cancel the active underlying deployment first..."
-                
-                # Robust fallback to get active deployment name
-                $deploymentName = $null
-
-                # Primary attempt: direct from stack object properties
-                if (($null -ne $stackObject) -and ($null -ne $stackObject.properties) -and ($null -ne $stackObject.properties.deploymentId)) {
-                    $deploymentId = $stackObject.properties.deploymentId
-                    $deploymentName = ($deploymentId -split '/')[-1]
-                    Write-Host "Retrieved deploymentId directly from stack properties: $deploymentName"
-                } else {
-                    Write-Warning "deploymentId not found in stack object properties. Falling back to querying active deployments in resource group..."
-                    
-                    $activeDeploymentsJson = az deployment group list --resource-group $VM_RG_NAME --query "[?contains(name, '$STACK_NAME') && properties.provisioningState=='Running']" --output json
-                    $activeDeployments = $activeDeploymentsJson | ConvertFrom-Json -ErrorAction SilentlyContinue 
-
-                    if ($activeDeployments -and ($activeDeployments.GetType().Name -ne 'String') -and $activeDeployments.Count -gt 0) {
-                        # Pick the one with the most recent timestamp
-                        try {
-                           $deploymentName = ($activeDeployments | Sort-Object { $_.properties.timestamp } -Descending)[0].name
-                           Write-Host "Identified fallback active deployment: $deploymentName"
-                        } catch {
-                           Write-Warning "Error processing active deployments list: $($_.Exception.Message). Could not determine fallback deployment name."
-                           $deploymentName = $null
-                        }
-                    } else {
-                        Write-Warning "No active deployments found matching '$STACK_NAME' in state 'Running' in resource group '$VM_RG_NAME', or error parsing deployment list. Cannot auto-cancel."
-                        if (($null -ne $activeDeployments) -and ($activeDeployments.GetType().Name -eq 'String')) { Write-Warning "Deployment list query output (if it was an error string): $activeDeployments" }
+            # --- BEGIN CANCELLATION LOGIC ---
+            $deploymentName = $null
+            if (($null -ne $stackObject) -and ($null -ne $stackObject.properties) -and ($null -ne $stackObject.properties.deploymentId)) {
+                $deploymentId = $stackObject.properties.deploymentId
+                $deploymentName = ($deploymentId -split '/')[-1]
+                Write-Host "Retrieved deploymentId directly from stack properties: $deploymentName"
+            } else {
+                Write-Warning "deploymentId not found in stack object properties. Falling back to querying active deployments in resource group..."
+                $activeDeploymentsJson = az deployment group list --resource-group $VM_RG_NAME --query "[?contains(name, '$STACK_NAME') && properties.provisioningState=='Running']" --output json
+                $activeDeployments = $activeDeploymentsJson | ConvertFrom-Json -ErrorAction SilentlyContinue
+                if ($activeDeployments -and ($activeDeployments.GetType().Name -ne 'String') -and $activeDeployments.Count -gt 0) {
+                    try {
+                       $deploymentName = ($activeDeployments | Sort-Object { $_.properties.timestamp } -Descending)[0].name
+                       Write-Host "Identified fallback active deployment: $deploymentName"
+                    } catch {
+                       Write-Warning "Error processing active deployments list: $($_.Exception.Message). Could not determine fallback deployment name."
+                       $deploymentName = $null
                     }
+                } else {
+                    Write-Warning "No active deployments found matching '$STACK_NAME' in state 'Running' in resource group '$VM_RG_NAME', or error parsing deployment list. Cannot auto-cancel."
+                    if (($null -ne $activeDeployments) -and ($activeDeployments.GetType().Name -eq 'String')) { Write-Warning "Deployment list query output (if it was an error string): $activeDeployments" }
                 }
+            }
 
-                if ($deploymentName) {
-                    Write-Host "Attempting to cancel deployment: $deploymentName"
-                    # Robust stderr capture for az deployment group cancel
-                    $tempCancelErrorFile = New-TemporaryFile
-                    az deployment group cancel --resource-group $VM_RG_NAME --name $deploymentName --output none 2> $tempCancelErrorFile.FullName
-                    $azCancelExitCode = $LASTEXITCODE
-                    $cancelErrorOutput = Get-Content $tempCancelErrorFile.FullName -Raw -ErrorAction SilentlyContinue
-                    Remove-Item $tempCancelErrorFile.FullName -Force -ErrorAction SilentlyContinue
+            $cancellationProcessedSuccessfully = $false 
 
-                    if ($azCancelExitCode -eq 0) {
-                        Write-Host "Cancellation request for deployment '$deploymentName' successfully sent."
-                        Write-Host "Waiting for Azure to process the cancellation (up to 5 minutes)..."
-                        $pollingStartTime = Get-Date
-                        $timeoutSeconds = 300 # 5 minutes
-                        $pollIntervalSeconds = 15
-                        $cancellationProcessed = $false # Renamed for clarity
+            if ($deploymentName) {
+                Write-Host "Attempting to cancel deployment: $deploymentName"
+                $tempCancelErrorFile = New-TemporaryFile
+                az deployment group cancel --resource-group $VM_RG_NAME --name $deploymentName --output none 2> $tempCancelErrorFile.FullName
+                $azCancelExitCode = $LASTEXITCODE
+                $cancelErrorOutput = Get-Content $tempCancelErrorFile.FullName -Raw -ErrorAction SilentlyContinue
+                Remove-Item $tempCancelErrorFile.FullName -Force -ErrorAction SilentlyContinue
 
-                        while ((Get-Date -UFormat %s) -lt ($pollingStartTime.AddSeconds($timeoutSeconds) | Get-Date -UFormat %s)) {
-                            Write-Host "Checking status of deployment '$deploymentName'..."
-                            $deploymentStatusJson = az deployment group show --resource-group $VM_RG_NAME --name $deploymentName --output json 2>$null
-                            $deploymentShowExitCode = $LASTEXITCODE
+                if ($azCancelExitCode -eq 0) {
+                    Write-Host "Cancellation request for deployment '$deploymentName' successfully sent."
+                    Write-Host "Waiting for Azure to process the cancellation (up to 5 minutes)..."
+                    $pollingStartTime = Get-Date
+                    $timeoutSeconds = 300 # 5 minutes
+                    $pollIntervalSeconds = 15
+                    
+                    while ((Get-Date -UFormat %s) -lt ($pollingStartTime.AddSeconds($timeoutSeconds) | Get-Date -UFormat %s)) {
+                        Write-Host "Checking status of deployment '$deploymentName'..."
+                        $deploymentStatusJson = az deployment group show --resource-group $VM_RG_NAME --name $deploymentName --output json 2>$null
+                        $deploymentShowExitCode = $LASTEXITCODE
 
-                            if ($deploymentShowExitCode -eq 0) {
-                                $deploymentObject = $deploymentStatusJson | ConvertFrom-Json -ErrorAction SilentlyContinue
-                                if ($deploymentObject -and $deploymentObject.properties -and $deploymentObject.properties.provisioningState) {
-                                    $currentDeploymentState = $deploymentObject.properties.provisioningState
-                                    Write-Host "Current deployment state: $currentDeploymentState"
-                                    if ($currentDeploymentState -eq 'Canceled' -or $currentDeploymentState -eq 'Failed' -or $currentDeploymentState -eq 'Succeeded') {
-                                        Write-Host "Deployment '$deploymentName' has reached a terminal state: $currentDeploymentState."
-                                        if ($currentDeploymentState -eq 'Canceled' -or $currentDeploymentState -eq 'Failed') {
-                                            # If 'Failed', it implies the deployment is no longer running and shouldn't block stack deletion.
-                                            $cancellationProcessed = $true
-                                        }
-                                        break
-                                    }
-                                } else {
-                                    Write-Warning "Could not parse status for deployment '$deploymentName', or provisioningState missing. Retrying..."
+                        if ($deploymentShowExitCode -eq 0) {
+                            $deploymentObject = $deploymentStatusJson | ConvertFrom-Json -ErrorAction SilentlyContinue
+                            if ($deploymentObject -and $deploymentObject.properties -and $deploymentObject.properties.provisioningState) {
+                                $currentDeploymentState = $deploymentObject.properties.provisioningState
+                                Write-Host "Current deployment state: $currentDeploymentState"
+                                if ($currentDeploymentState -eq 'Canceled' -or $currentDeploymentState -eq 'Failed' -or $currentDeploymentState -eq 'Succeeded') {
+                                    Write-Host "Deployment '$deploymentName' has reached a terminal state: $currentDeploymentState."
+                                    $cancellationProcessedSuccessfully = $true
+                                    break
                                 }
                             } else {
-                                # If 'az deployment group show' fails, it might mean the deployment is already gone/deleted.
-                                Write-Warning "Failed to get status for deployment '$deploymentName' (az deployment group show exit code: $deploymentShowExitCode). It might have been deleted or an error occurred. Assuming cancellation is effective."
-                                $cancellationProcessed = $true 
-                                break 
+                                Write-Warning "Could not parse status for deployment '$deploymentName', or provisioningState missing. Retrying..."
                             }
-                            Start-Sleep -Seconds $pollIntervalSeconds
-                            Write-Host "Still waiting for deployment '$deploymentName' to complete cancellation..."
+                        } else {
+                            Write-Warning "Failed to get status for deployment '$deploymentName' (az deployment group show exit code: $deploymentShowExitCode). It might have been deleted or an error occurred. Assuming cancellation is effective."
+                            $cancellationProcessedSuccessfully = $true 
+                            break 
                         }
+                        Start-Sleep -Seconds $pollIntervalSeconds
+                        Write-Host "Still waiting for deployment '$deploymentName' to complete cancellation..."
+                    }
 
-                        if (-not $cancellationProcessed -and ((Get-Date -UFormat %s) -ge ($pollingStartTime.AddSeconds($timeoutSeconds) | Get-Date -UFormat %s))) {
-                            Write-Warning "Timed out waiting for deployment '$deploymentName' to cancel/terminate. Proceeding with stack deletion attempt, but it might fail or take longer."
-                        } elseif ($cancellationProcessed) {
-                            Write-Host "Deployment '$deploymentName' cancellation/termination processed."
-                        }
-                    } else {
-                        Write-Warning "Failed to send cancellation request for deployment '$deploymentName'. Azure CLI error: $cancelErrorOutput. The deployment may still be active or already completed/failed. Proceeding with caution."
+                    if (-not $cancellationProcessedSuccessfully -and ((Get-Date -UFormat %s) -ge ($pollingStartTime.AddSeconds($timeoutSeconds) | Get-Date -UFormat %s))) {
+                        Write-Error "Timed out waiting for deployment '$deploymentName' to cancel/terminate. Aborting update. Please check the Azure portal."
+                        exit 1
+                    } elseif ($cancellationProcessedSuccessfully) {
+                        Write-Host "Deployment '$deploymentName' cancellation/termination processed."
                     }
                 } else {
-                    Write-Warning "Could not determine an active deployment name to cancel. If stack deletion fails, you may need to cancel manually in the Azure Portal."
+                    Write-Error "Failed to send cancellation request for deployment '$deploymentName'. Azure CLI error: $cancelErrorOutput. Aborting update."
+                    exit 1
                 }
+            } else {
+                Write-Warning "Could not determine an active deployment name to cancel. Proceeding with update attempt, but it might fail."
+                # If no deployment name, we assume we can proceed with the update attempt.
             }
+            # --- END CANCELLATION LOGIC ---
+            Write-Host "Proceeding with stack update."
 
-            Write-Host "Attempting to delete existing stack '$STACK_NAME'..."
-            Write-Host "Note: Stack deletion can take several minutes, especially if it involves multiple resources. Please be patient."
-            # Robust stderr capture for az stack group delete
-            $tempErrorFile = New-TemporaryFile
-            az stack group delete --name $STACK_NAME --resource-group $VM_RG_NAME --yes --action-on-unmanage deleteResources --output none 2> $tempErrorFile.FullName
-            $azDeleteExitCode = $LASTEXITCODE
-            $deleteErrorOutput = Get-Content $tempErrorFile.FullName -Raw -ErrorAction SilentlyContinue
-            Remove-Item $tempErrorFile.FullName -Force -ErrorAction SilentlyContinue
-
-            if ($azDeleteExitCode -ne 0) {
-                $errorMessage = "Failed to delete existing stack '$STACK_NAME'."
-                if ($deleteErrorOutput -match "DeploymentStackInNonTerminalState") {
-                    $errorMessage += " Azure reported that the stack is still in a non-terminal state (e.g., 'Deploying', 'Provisioning')."
-                    $errorMessage += " This can happen if the previous cancellation attempt was not fully processed or if another operation started."
-                    $errorMessage += " Please check the Azure portal: navigate to the resource group '$VM_RG_NAME', review the 'Deployments' section, and ensure any active deployment for this stack is cancelled or completed."
-                    $errorMessage += " You might need to use: az deployment group cancel --resource-group $VM_RG_NAME --name <NAME_OF_THE_ACTIVE_DEPLOYMENT_FROM_PORTAL>"
-                } elseif ($deleteErrorOutput) {
-                    $errorMessage += " Azure CLI reported an error during stack deletion: $deleteErrorOutput."
-                } else {
-                    $errorMessage += " An unexpected error occurred during stack deletion."
-                }
-                Write-Error "$errorMessage Aborting deployment."
-                exit 1
-            }
-            Write-Host "Existing stack '$STACK_NAME' deleted successfully."
-            $stackStatus = $null # Reset status so deployment proceeds as if stack didn't exist
+        } else {
+            Write-Host "Update aborted by user. Please monitor the stack '$STACK_NAME' in the Azure portal."
+            exit 1
+        }
+    } elseif ($stackStatus -eq 'Failed' -or `
+               $stackStatus -eq 'DeletingFailed' -or `
+               $stackStatus -eq 'Cancelling' -or `
+               $stackStatus -eq 'CreateFailed' -or `
+               $stackStatus -eq 'UpdateFailed') {
+        
+        Write-Warning "The deployment stack '$STACK_NAME' is in a non-terminal/failed state: '$stackStatus'."
+        $confirmation = Read-Host "Do you want to attempt to update the stack '$STACK_NAME'? (y/n) (Choosing 'n' will abort)"
+        if ($confirmation -eq 'y') {
+            Write-Host "Proceeding with update for stack in '$stackStatus' state."
+            # No deletion, just proceed to the update command later in the script.
         } else {
             Write-Host "Deployment aborted by user. Please monitor the stack '$STACK_NAME' in the Azure portal."
             exit 1
