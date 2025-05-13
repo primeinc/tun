@@ -15,8 +15,10 @@ echo "[*] Enabling Caddy to bind low ports..."
 sudo setcap 'cap_net_bind_service=+ep' caddy
 
 # Move Caddy binary to /usr/local/bin if needed
-# sudo mv caddy /usr/local/bin/
-# sudo chmod +x /usr/local/bin/caddy
+sudo mv caddy /usr/local/bin/
+sudo chmod +x /usr/local/bin/caddy
+sudo mkdir -p /etc/caddy
+sudo mv caddy_config.json /etc/caddy/caddy_config.json
 
 # Ensure HOME is defined (required for config resolution)
 export HOME=/root
