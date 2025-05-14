@@ -125,11 +125,12 @@ function New-Tunnel {
             "-o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes"
         } else {
             "-o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes"
-        }
-          # Use the constructed SSH options
+        }        # Use the constructed SSH options
         # Pass RemotePort as the second argument to match the actual listening port in the SSH tunnel
         Write-Verbose "Using remote port $RemotePort for the tunnel"
-        Invoke-Expression "ssh $sshOptions -t -R ${RemotePort}:${LocalHost}:${LocalPort} ${user}@${ip} /opt/sirtunnel/sirtunnel.py $Subdomain.tun.$domain $RemotePort"
+          # Use specific interface binding to ensure consistent networking between remote and local
+        # This helps especially when the local service is only bound to 127.0.0.1
+        Invoke-Expression "ssh $sshOptions -t -R 127.0.0.1:${RemotePort}:127.0.0.1:${LocalPort} ${user}@${ip} /opt/sirtunnel/sirtunnel.py $Subdomain.tun.$domain $RemotePort"
         $exitCode = $LASTEXITCODE
         
         # Verify SSH completed successfully
