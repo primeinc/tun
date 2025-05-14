@@ -199,6 +199,74 @@ if ($rootRecordExists) {
     }
 }
 
+# Check if the root domain has a CAA record
+Write-Host "`nChecking for CAA record on domain root..." -ForegroundColor Cyan
+$caaRecordExists = $false
+try {
+    $caaRecord = az network dns record-set caa show --name "@" --zone-name $DNS_ZONE_NAME --resource-group $DNS_ZONE_RG 2>$null
+    if ($caaRecord) {
+        $caaRecordExists = $true
+        $caaRecordJson = $caaRecord | ConvertFrom-Json
+        
+        # Check if there's already a CAA record for Let's Encrypt
+        $letsEncryptExists = $false
+        if ($caaRecordJson.caaRecords -and $caaRecordJson.caaRecords.Count -gt 0) {
+            foreach ($record in $caaRecordJson.caaRecords) {
+                if ($record.value -eq "letsencrypt.org" -and $record.tag -eq "issue") {
+                    $letsEncryptExists = $true
+                    break
+                }
+            }
+        }
+        
+        if ($letsEncryptExists) {
+            Write-Host "✓ CAA record for Let's Encrypt already exists on $DNS_ZONE_NAME" -ForegroundColor Green
+        } else {
+            Write-Host "Adding Let's Encrypt CAA record to existing CAA record set..." -ForegroundColor Cyan
+            az network dns record-set caa add-record `
+                --resource-group $DNS_ZONE_RG `
+                --zone-name $DNS_ZONE_NAME `
+                --record-set-name "@" `
+                --flags 0 `
+                --tag "issue" `
+                --value "letsencrypt.org"
+            
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "✓ Added Let's Encrypt CAA record to $DNS_ZONE_NAME" -ForegroundColor Green
+            } else {
+                Write-Error "Failed to add Let's Encrypt CAA record"
+            }
+        }
+    }
+} catch {
+    Write-Host "No existing CAA record found on domain root" -ForegroundColor Yellow
+}
+
+if (-not $caaRecordExists) {
+    # Create a new CAA record for Let's Encrypt
+    Write-Host "Creating new CAA record for Let's Encrypt..." -ForegroundColor Cyan
+    
+    az network dns record-set caa create `
+        --resource-group $DNS_ZONE_RG `
+        --zone-name $DNS_ZONE_NAME `
+        --name "@" `
+        --ttl 3600
+    
+    az network dns record-set caa add-record `
+        --resource-group $DNS_ZONE_RG `
+        --zone-name $DNS_ZONE_NAME `
+        --record-set-name "@" `
+        --flags 0 `
+        --tag "issue" `
+        --value "letsencrypt.org"
+    
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "✓ Created CAA record for Let's Encrypt on $DNS_ZONE_NAME" -ForegroundColor Green
+    } else {
+        Write-Error "Failed to create CAA record for Let's Encrypt"
+    }
+}
+
 # Remind about DNS propagation
 Write-Host "`nDNS records created/updated successfully!" -ForegroundColor Green
 Write-Host "Note: DNS changes may take some time to propagate (typically 5-30 minutes)" -ForegroundColor Yellow
