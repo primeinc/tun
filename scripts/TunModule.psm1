@@ -81,21 +81,60 @@ uptime && hostname
 
         ssh "$user@$ip" "$logCommand"
         return
-    }
-
-    if ($RemotePort -eq 0) {
+    }    if ($RemotePort -eq 0) {
         $RemotePort = $LocalPort + 6000
     }
-
-    if ($Force) {
+    
+    # Check if we have a known_hosts file with entries for this IP
+    $knownHostsFile = "$HOME/.ssh/known_hosts"
+    $hostKeyMayNeedReset = $false
+    
+    # Only do this check if the known_hosts file exists
+    if (Test-Path $knownHostsFile) {
+        $content = Get-Content $knownHostsFile -Raw -ErrorAction SilentlyContinue
+        # Check if the IP is already in known_hosts
+        if ($content -and $content -match [regex]::Escape($ip)) {
+            # We found the IP in known_hosts
+            $hostKeyMayNeedReset = $true
+        }
+    }
+    
+    # Handle host key verification based on Force flag or auto-detection
+    if ($Force -or $hostKeyMayNeedReset) {
         Write-Host "Removing previous host keys for $ip..." -ForegroundColor Yellow
-        ssh-keygen -R $ip 2>&1 | Out-Null
+        try {
+            ssh-keygen -R $ip 2>&1 | Out-Null
+            # Also remove by IP address in case the hostname doesn't match
+            if ($ip -match "\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b") {
+                # This is an IP address, try to find any matching entries
+                if (Test-Path $knownHostsFile) {
+                    $content = Get-Content $knownHostsFile -Raw -ErrorAction SilentlyContinue
+                    if ($content -and $content -match [regex]::Escape($ip)) {
+                        Write-Host "IP address found in known_hosts, removing all matching entries..." -ForegroundColor Yellow
+                        $newContent = ($content -split "`n") | Where-Object { $_ -notmatch [regex]::Escape($ip) }
+                        $newContent | Set-Content $knownHostsFile -Force
+                    }
+                }
+            }
+        } catch {
+            Write-Host "Warning: Error removing host key: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "Will continue with StrictHostKeyChecking=no" -ForegroundColor Yellow
+        }
     }    $tunnelUrl = "https://$Subdomain.tun.$domain"
     $localEndpoint = "$LocalHost`:$LocalPort"
     Write-Host "Creating tunnel: $tunnelUrl -> $localEndpoint" -ForegroundColor Cyan
     
     try {
-        ssh -o "StrictHostKeyChecking=accept-new" -t -R "${RemotePort}:${LocalHost}:${LocalPort}" "$user@$ip" "/opt/sirtunnel/sirtunnel.py $Subdomain.tun.$domain $RemotePort"
+        # Use StrictHostKeyChecking=no if -Force is used or if we detected a potential host key issue
+        # This provides more reliability by default without requiring users to remember the -Force flag
+        $sshOptions = if ($Force -or $hostKeyMayNeedReset) {
+            "-o StrictHostKeyChecking=no"
+        } else {
+            "-o StrictHostKeyChecking=accept-new"
+        }
+        
+        # Use the constructed SSH options
+        Invoke-Expression "ssh $sshOptions -t -R ${RemotePort}:${LocalHost}:${LocalPort} ${user}@${ip} /opt/sirtunnel/sirtunnel.py $Subdomain.tun.$domain $RemotePort"
         
         # Save successful tunnel info to persistent storage
         $tunnelInfo = @{
@@ -111,10 +150,22 @@ uptime && hostname
         # Save to persistent file and maintain env var for backward compatibility
         Save-TunnelInfo -Info $tunnelInfo
         $env:LAST_TUNNEL_VM = $ip
+          } catch {
+        $errorMessage = $_.Exception.Message
+        Write-Host "Error establishing tunnel: $errorMessage" -ForegroundColor Red
         
-    } catch {
-        Write-Host "Error establishing tunnel: $($_.Exception.Message)" -ForegroundColor Red
-        Write-Host "Use -Force if host key mismatch is suspected." -ForegroundColor Yellow
+        # Provide specific guidance based on error type
+        if ($errorMessage -match "Host key verification failed") {
+            Write-Host "Host key verification failed. The VM's SSH key has likely changed." -ForegroundColor Yellow
+            Write-Host "Try running the command again with the -Force parameter:" -ForegroundColor Yellow
+            Write-Host "  tun $Subdomain $LocalPort -Force" -ForegroundColor Cyan
+        } elseif ($errorMessage -match "Connection refused") {
+            Write-Host "Connection refused. The VM might be down or the SSH service is not running." -ForegroundColor Yellow
+            Write-Host "Try redeploying the VM extension:" -ForegroundColor Yellow
+            Write-Host "  ./scripts/redeploy-extension.ps1 -Force" -ForegroundColor Cyan
+        } else {
+            Write-Host "Try using -Force to reset any SSH connection issues." -ForegroundColor Yellow
+        }
     }
 }
 

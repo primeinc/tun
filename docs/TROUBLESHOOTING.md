@@ -14,6 +14,17 @@ This document provides solutions for common issues encountered when using SirTun
 - Check that port 22 is open in the Network Security Group
 - Verify your SSH key is correctly configured
 
+### Host Key Verification Failed
+
+**Problem:** SSH connection fails with "Host key verification failed" error.
+
+**Possible Solutions:**
+- Use the `-Force` parameter when creating the tunnel: `tun api 3000 -Force`
+- Manually remove the host key entry: `ssh-keygen -R <vm-ip-address>`
+- If you're certain the host is legitimate, you can use `ssh -o StrictHostKeyChecking=no` for a one-time connection
+
+**Explanation:** This happens when the VM's SSH key changes, which is common after VM redeployments or recreations. The latest version of SirTunnel attempts to automatically handle these issues when it detects existing host keys.
+
 ### Tunnel Not Accessible
 
 **Problem:** SSH connection succeeds but https://<subdomain>.tun.title.dev is not accessible.
@@ -76,6 +87,27 @@ This document provides solutions for common issues encountered when using SirTun
 - Check that the VM's managed identity has "DNS Zone Contributor" role on the DNS zone
 - Confirm the DNS zone name and resource group are correct
 - It can take a few minutes for role assignments to propagate
+
+### SeSecurityPrivilege Errors
+
+**Problem:** You see errors related to "SeSecurityPrivilege" or "The process does not possess the 'SeSecurityPrivilege' privilege which is required for this operation" when creating tunnels or running the setup scripts.
+
+**Possible Solutions:**
+- The latest version of SirTunnel automatically detects privilege levels and works in non-admin mode
+- Run PowerShell as Administrator if you need secure file permissions
+- Use the `-DryRun` parameter with `redeploy-extension.ps1` to set up the module without requiring elevated privileges
+
+**Explanation:** SirTunnel attempts to set secure ACL permissions on its configuration files, which requires the SeSecurityPrivilege. When running as a standard user, these operations will now gracefully fallback to standard permissions.
+
+### File Access Denied Issues
+
+**Problem:** You can't access or modify files in the `.tun` directory.
+
+**Possible Solutions:**
+- Check file ownership: `Get-Acl "$HOME/.tun"`
+- Ensure your user account has access to these files
+- If running in a corporate environment, check with your IT department about file access policies
+- Use standard file permissions by running: `Initialize-TunnelEnvironment -SkipSecurePermissions`
 
 ## Local Service Issues
 

@@ -135,49 +135,35 @@ if (Test-Path $utilsPath) {
   . $utilsPath
 } else {
   Write-Host "[WARN] Utils.ps1 not found. Tunnel state will not be persisted." -ForegroundColor Yellow
-}  try {
-    if ($DryRun) {
-      $vmInfo = [PSCustomObject]@{ name = "VM_NAME_PLACEHOLDER"; publicIps = "10.20.30.40" }
-      Write-Host "[DRY RUN] Using placeholder VM IP: $($vmInfo.publicIps)" -ForegroundColor Yellow
-    } else {
-      $vmInfo = az vm show --resource-group $VM_RG_NAME --name $VM_NAME --show-details --query "{name:name, publicIps:publicIps}" --output json | ConvertFrom-Json
-    }
+}
 
-    if ($vmInfo -and $vmInfo.publicIps) {
-      # Check for security privileges before doing anything else
-      $hasSecurityPrivilege = $false
-      if (Get-Command -Name Test-SecurityPrivilege -ErrorAction SilentlyContinue) {
-        $hasSecurityPrivilege = Test-SecurityPrivilege
-        if (-not $hasSecurityPrivilege) {
-          Write-Host "[INFO] Running without security privileges - secure permissions will be skipped" -ForegroundColor Yellow
-        }
-      }
+try {
+  if ($DryRun) {
+    $vmInfo = [PSCustomObject]@{ name = "VM_NAME_PLACEHOLDER"; publicIps = "10.20.30.40" }
+    Write-Host "[DRY RUN] Using placeholder VM IP: $($vmInfo.publicIps)" -ForegroundColor Yellow
+  } else {
+    $vmInfo = az vm show --resource-group $VM_RG_NAME --name $VM_NAME --show-details --query "{name:name, publicIps:publicIps}" --output json | ConvertFrom-Json
+  }
+
+  if ($vmInfo -and $vmInfo.publicIps) {
+    $tunDir = Initialize-TunnelEnvironment -SkipSecurePermissions:$DryRun
+    $modulePath = Join-Path $PSScriptRoot "TunModule.psm1"
+
+    if (Test-Path $utilsPath) {
+      $tunnelInfo = if (Test-Path "$HOME/.tun/last.json") { Get-TunnelInfo -Silent } else { @{} }      $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "vmIp" -NotePropertyValue $vmInfo.publicIps -Force -PassThru
+      $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "user" -NotePropertyValue $ADMIN_USER -Force -PassThru
+      $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "updated" -NotePropertyValue (Get-Date).ToString("o") -Force -PassThru
       
-      # Initialize the tunnel directory with appropriate permissions
-      $tunDir = Initialize-TunnelEnvironment -SkipSecurePermissions:(-not $hasSecurityPrivilege)
-      $modulePath = Join-Path $PSScriptRoot "TunModule.psm1"
-
-      if (Test-Path $utilsPath) {
-        $tunnelInfo = if (Test-Path "$HOME/.tun/last.json") { Get-TunnelInfo -Silent } else { @{} }
-        $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "vmIp" -NotePropertyValue $vmInfo.publicIps -Force -PassThru
-        $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "user" -NotePropertyValue $ADMIN_USER -Force -PassThru
-        $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "updated" -NotePropertyValue (Get-Date).ToString("o") -Force -PassThru
-        
-        # Pass the security privilege information to Save-TunnelInfo
-        Save-TunnelInfo -Info $tunnelInfo -SkipSecurePermissions:(-not $hasSecurityPrivilege)
+      # Pass the SkipSecurePermissions parameter when in DryRun mode
+      Save-TunnelInfo -Info $tunnelInfo -SkipSecurePermissions:$DryRun
       
       $env:LAST_TUNNEL_VM = $vmInfo.publicIps
-    }
-
-    # Copy module files with error handling
-    try {
+    }    # Copy module files with error handling    try {
       Copy-Item -Path $modulePath -Destination "$tunDir/TunModule.psm1" -Force
       Copy-Item -Path $utilsPath -Destination "$tunDir/utils.ps1" -Force
     } catch {
       Write-Warning "Could not copy module files: $($_.Exception.Message)"
-    }
-    
-    # Create or update tunnel config
+    }# Create or update tunnel config
     try {
       $configPath = "$tunDir/config.json"
       $config = if (Test-Path $configPath) { Get-Content $configPath | ConvertFrom-Json } else { @{} }
@@ -196,11 +182,7 @@ if (Test-Path $utilsPath) {
 
     try {
       if (-not (Test-Path $profilePath)) {
-        try {
-          New-Item -ItemType File -Path $profilePath -Force | Out-Null
-        } catch {
-          Write-Warning "Could not create profile file: $($_.Exception.Message)"
-        }
+        New-Item -ItemType File -Path $profilePath -Force | Out-Null
       }
 
       $profileContent = ''
