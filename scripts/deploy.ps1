@@ -229,6 +229,25 @@ if ($LASTEXITCODE -ne 0) {
 # Get deployment outputs
 $outputs = az stack group show --name $STACK_NAME --resource-group $VM_RG_NAME --query "outputs" | ConvertFrom-Json
 
+# Deploy the VM Extension
+Write-Host "`nDeploying the CustomScript extension..." -ForegroundColor Cyan
+$extensionScriptPath = Join-Path $PSScriptRoot "redeploy-extension.ps1"
+if (Test-Path $extensionScriptPath) {
+    try {
+        Write-Host "Running extension deployment script: $extensionScriptPath"
+        & $extensionScriptPath -Force
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Extension deployment completed with exit code $LASTEXITCODE. Check logs for details."
+        } else {
+            Write-Host "Extension deployment completed successfully!" -ForegroundColor Green
+        }
+    } catch {
+        Write-Warning "Exception occurred during extension deployment: $($_.Exception.Message)"
+    }
+} else {
+    Write-Warning "Extension deployment script not found at: $extensionScriptPath"
+}
+
 # Display useful information
 Write-Host "`nDeployment completed successfully!`n" -ForegroundColor Green
 Write-Host "Public IP Address: $($outputs.publicIPAddress.value)"

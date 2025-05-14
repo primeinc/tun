@@ -209,8 +209,10 @@ module dnsRoleAssignment 'modules/dns-role-assignment.bicep' = {
 
 // --- VM Extension for Setup ---
 // VM Extension for Setup intentionally removed from Bicep critical path.
-// The CustomScript extension will be applied post-provision via az vm extension set, not in the Bicep deployment.
-// If you want to keep the resource for reference, comment it out as below:
+// The CustomScript extension is applied post-provision via the redeploy-extension.ps1 script 
+// which is automatically called by deploy.ps1 after a successful deployment.
+// This two-step approach allows for more flexibility and better error recovery.
+// Reference implementation kept below for documentation:
 /*
 resource vmExtension 'Microsoft.Compute/virtualMachines/extensions@2024-03-01' = {
   parent: virtualMachine
