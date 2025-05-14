@@ -101,9 +101,9 @@ function Save-TunnelInfo {
                     "None",
                     "None",
                     "Allow"
-                )
-                $fileAcl.AddAccessRule($fileOwnerRule)
-                Set-Acl "$tunDir/last.json" $fileAcl
+                )                $fileAcl.AddAccessRule($fileOwnerRule)
+                # Use ErrorAction SilentlyContinue to completely suppress the error message
+                Set-Acl "$tunDir/last.json" $fileAcl -ErrorAction SilentlyContinue
                 Write-Verbose "Secure permissions set on $tunDir/last.json"
             } catch {
                 # This catch should never execute since we check for privileges beforehand

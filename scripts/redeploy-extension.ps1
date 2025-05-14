@@ -180,15 +180,46 @@ try {
       }
     }
   }
-  
-  # If we still don't have an IP and not in DryRun mode, query Azure
+    # If we still don't have an IP and not in DryRun mode, query Azure
   if (-not $ipToUse -and -not $DryRun) {
-    $vmInfo = az vm show --resource-group $VM_RG_NAME --name $VM_NAME --show-details --query "{name:name, publicIps:publicIps}" --output json | ConvertFrom-Json
-    if ($vmInfo -and $vmInfo.publicIps) {
-      $ipToUse = $vmInfo.publicIps
-      Write-Host "[INFO] Retrieved VM IP from Azure: $ipToUse" -ForegroundColor Cyan
-    } else {
-      Write-Warning "Could not retrieve VM IP from Azure"
+    try {
+      # First try to get the public IP from the VM's network interface
+      $networkInterfaceId = az vm show --resource-group $VM_RG_NAME --name $VM_NAME --query "networkProfile.networkInterfaces[0].id" -o tsv
+      if ($networkInterfaceId) {
+        $publicIpId = az network nic show --ids $networkInterfaceId --query "ipConfigurations[0].publicIpAddress.id" -o tsv
+        if ($publicIpId) {
+          $publicIp = az network public-ip show --ids $publicIpId --query "ipAddress" -o tsv
+          if ($publicIp) {
+            $ipToUse = $publicIp
+            Write-Host "[INFO] Retrieved VM IP from Azure: $ipToUse" -ForegroundColor Cyan
+          }
+        }
+      }
+      
+      # Fallback to the old method if the above didn't work
+      if (-not $ipToUse) {
+        $vmInfo = az vm show --resource-group $VM_RG_NAME --name $VM_NAME --show-details --query "{name:name, publicIps:publicIps}" --output json | ConvertFrom-Json
+        if ($vmInfo -and $vmInfo.publicIps) {
+          $ipToUse = $vmInfo.publicIps
+          Write-Host "[INFO] Retrieved VM IP from Azure: $ipToUse" -ForegroundColor Cyan
+        } else {
+          Write-Warning "Could not retrieve VM IP from Azure using show-details"
+        }
+      }
+    } catch {
+      Write-Warning "Error retrieving VM IP from Azure: $($_.Exception.Message)"
+    }
+    
+    # Verify we got a valid IP address and not just the VM name
+    if ($ipToUse -and $ipToUse -eq $VM_NAME) {
+      Write-Warning "Retrieved IP matches VM name, which is likely incorrect"
+      $ipToUse = $null
+    }
+    
+    # If we still don't have an IP address, prompt the user
+    if (-not $ipToUse) {
+      Write-Host "[WARN] Could not automatically determine VM IP address" -ForegroundColor Yellow
+      $ipToUse = Read-Host "Please enter the VM's public IP address"
     }
   }
   
