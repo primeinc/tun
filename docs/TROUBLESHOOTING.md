@@ -2,6 +2,25 @@
 
 This document provides solutions for common issues encountered when using SirTunnel.
 
+## Configuration and Setup Issues
+
+### Working with DryRun Mode
+
+**Problem:** Needing to test or configure locally without actual Azure deployments.
+
+**Solutions:**
+- Use the `-DryRun` parameter to set up local files only
+- Specify an IP address with the new `-IpOverride` parameter: `.\redeploy-extension.ps1 -DryRun -IpOverride "20.30.40.50"`
+- Add a permanent override in your config.ps1: `$VM_IP_OVERRIDE = "20.30.40.50"`
+
+**Example:** Dry run with IP from existing tunnel:
+```powershell
+# Get current IP from existing tunnel
+$ip = (Get-Content "$HOME/.tun/last.json" | ConvertFrom-Json).vmIp
+# Run setup with that IP
+.\scripts\redeploy-extension.ps1 -DryRun -IpOverride $ip
+```
+
 ## Connection Issues
 
 ### SSH Connection Refused

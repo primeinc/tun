@@ -13,8 +13,14 @@ Forces redeployment if extension is in a failed state.
 .PARAMETER DryRun
 Performs a dry run—no Azure operations, only local setup.
 
+.PARAMETER IpOverride
+Specifies a custom IP address to use instead of querying Azure or using a placeholder.
+
 .EXAMPLE
 .\redeploy-extension.ps1 -DryRun
+
+.EXAMPLE
+.\redeploy-extension.ps1 -DryRun -IpOverride "20.30.40.50"
 
 .NOTES
 Fails on unknown parameters. Requires AZ CLI and PowerShell 5+.
@@ -23,26 +29,31 @@ Fails on unknown parameters. Requires AZ CLI and PowerShell 5+.
 [CmdletBinding()]
 param(
   [switch]$Force,
-  [switch]$DryRun
+  [switch]$DryRun,
+  [string]$IpOverride
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # Fail fast if unknown parameters were passed (e.g., --DryRun instead of -DryRun)
-$allowedParams = 'Force', 'DryRun'
 $rawArgs = $MyInvocation.Line.Split() | Where-Object { $_ -like '--*' -or $_ -like '-*' }
 $invalidArgs = $rawArgs | Where-Object {
-  ($_ -notmatch '^-(Force|DryRun)$') -and ($_ -notmatch '^--(Force|DryRun)$')
+  ($_ -notmatch '^-(Force|DryRun|IpOverride)$') -and ($_ -notmatch '^--(Force|DryRun|IpOverride)$')
 }
 if ($invalidArgs) {
-  throw "Unknown parameter(s): $($invalidArgs -join ', '). Use -Force or -DryRun (single dash only)."
+  throw "Unknown parameter(s): $($invalidArgs -join ', '). Valid parameters: -Force, -DryRun, -IpOverride"
 }
 
 # Load deployment config
 Write-Host "[DEBUG] Loading config from: $PSScriptRoot/config.ps1" -ForegroundColor Cyan
 . "$PSScriptRoot/config.ps1"
 Write-Host "[DEBUG] Config loaded, VM_RG_NAME: $VM_RG_NAME" -ForegroundColor Cyan
+
+# Define VM_IP_OVERRIDE if it doesn't exist
+if (-not (Get-Variable -Name VM_IP_OVERRIDE -ErrorAction SilentlyContinue)) {
+  $VM_IP_OVERRIDE = $null
+}
 
 # Build settings and protectedSettings objects
 $settings = @{
@@ -135,46 +146,112 @@ if (Test-Path $utilsPath) {
   . $utilsPath
 } else {
   Write-Host "[WARN] Utils.ps1 not found. Tunnel state will not be persisted." -ForegroundColor Yellow
-}  try {
-    if ($DryRun) {
-      $vmInfo = [PSCustomObject]@{ name = "VM_NAME_PLACEHOLDER"; publicIps = "10.20.30.40" }
-      Write-Host "[DRY RUN] Using placeholder VM IP: $($vmInfo.publicIps)" -ForegroundColor Yellow
-    } else {
-      $vmInfo = az vm show --resource-group $VM_RG_NAME --name $VM_NAME --show-details --query "{name:name, publicIps:publicIps}" --output json | ConvertFrom-Json
-    }
+}
 
-    if ($vmInfo -and $vmInfo.publicIps) {
-      # Check for security privileges before doing anything else
-      $hasSecurityPrivilege = $false
-      if (Get-Command -Name Test-SecurityPrivilege -ErrorAction SilentlyContinue) {
-        $hasSecurityPrivilege = Test-SecurityPrivilege
-        if (-not $hasSecurityPrivilege) {
-          Write-Host "[INFO] Running without security privileges - secure permissions will be skipped" -ForegroundColor Yellow
-        }
+try {
+  # Determine the IP address to use in the following priority:
+  # 1. IpOverride parameter (if provided)
+  # 2. VM_IP_OVERRIDE from config.ps1 (if defined)
+  # 3. Existing tunnel info (if available)
+  # 4. Query Azure (if not DryRun)
+  # 5. Use VM_NAME as fallback (if DryRun)
+  
+  $ipToUse = $null
+  
+  # Check command line override
+  if ($IpOverride) {
+    $ipToUse = $IpOverride
+    Write-Host "[INFO] Using IP override from parameter: $ipToUse" -ForegroundColor Cyan
+  }
+  # Check config file override
+  elseif ($VM_IP_OVERRIDE) {
+    $ipToUse = $VM_IP_OVERRIDE
+    Write-Host "[INFO] Using IP override from config: $ipToUse" -ForegroundColor Cyan
+  }
+  # Check existing tunnel info
+  elseif (Test-Path "$HOME/.tun/last.json") { 
+    $existingTunnelInfo = Get-TunnelInfo -Silent
+    if ($existingTunnelInfo -and $existingTunnelInfo.vmIp) {
+      $ipToUse = $existingTunnelInfo.vmIp
+      if ($DryRun) {
+        Write-Host "[DRY RUN] Using existing VM IP from tunnel info: $ipToUse" -ForegroundColor Yellow
+      } else {
+        Write-Host "[INFO] Found existing VM IP: $ipToUse" -ForegroundColor Cyan
       }
-      
-      # Initialize the tunnel directory with appropriate permissions
-      $tunDir = Initialize-TunnelEnvironment -SkipSecurePermissions:(-not $hasSecurityPrivilege)
-      $modulePath = Join-Path $PSScriptRoot "TunModule.psm1"
+    }
+  }
+  
+  # If we still don't have an IP and not in DryRun mode, query Azure
+  if (-not $ipToUse -and -not $DryRun) {
+    $vmInfo = az vm show --resource-group $VM_RG_NAME --name $VM_NAME --show-details --query "{name:name, publicIps:publicIps}" --output json | ConvertFrom-Json
+    if ($vmInfo -and $vmInfo.publicIps) {
+      $ipToUse = $vmInfo.publicIps
+      Write-Host "[INFO] Retrieved VM IP from Azure: $ipToUse" -ForegroundColor Cyan
+    } else {
+      Write-Warning "Could not retrieve VM IP from Azure"
+    }
+  }
+  
+  # Final fallback for DryRun mode
+  if (-not $ipToUse -and $DryRun) {
+    $ipToUse = $VM_NAME
+    Write-Host "[DRY RUN] Using VM name as placeholder IP: $ipToUse" -ForegroundColor Yellow
+    Write-Host "[TIP] To use a specific IP, add VM_IP_OVERRIDE='your.ip.address' to config.ps1" -ForegroundColor Yellow
+    Write-Host "[TIP] Or use -IpOverride parameter: -DryRun -IpOverride '1.2.3.4'" -ForegroundColor Yellow
+  }
+  
+  # Create the vmInfo object used by the rest of the script
+  $vmInfo = [PSCustomObject]@{ 
+    name = $VM_NAME
+    publicIps = $ipToUse
+  }
 
-      if (Test-Path $utilsPath) {
-        $tunnelInfo = if (Test-Path "$HOME/.tun/last.json") { Get-TunnelInfo -Silent } else { @{} }
-        $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "vmIp" -NotePropertyValue $vmInfo.publicIps -Force -PassThru
-        $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "user" -NotePropertyValue $ADMIN_USER -Force -PassThru
-        $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "updated" -NotePropertyValue (Get-Date).ToString("o") -Force -PassThru
-        
-        # Pass the security privilege information to Save-TunnelInfo
-        Save-TunnelInfo -Info $tunnelInfo -SkipSecurePermissions:(-not $hasSecurityPrivilege)
+  if ($vmInfo -and $vmInfo.publicIps) {
+    # Check for security privileges before doing anything else
+    $hasSecurityPrivilege = $false
+    if (Get-Command -Name Test-SecurityPrivilege -ErrorAction SilentlyContinue) {
+      $hasSecurityPrivilege = Test-SecurityPrivilege
+      if (-not $hasSecurityPrivilege) {
+        Write-Host "[INFO] Running without security privileges - secure permissions will be skipped" -ForegroundColor Yellow
+      }
+    }
+    
+    # Initialize the tunnel directory with appropriate permissions
+    $tunDir = Initialize-TunnelEnvironment -SkipSecurePermissions:(-not $hasSecurityPrivilege)
+    $modulePath = Join-Path $PSScriptRoot "TunModule.psm1"
+
+    if (Test-Path $utilsPath) {
+      $tunnelInfo = if (Test-Path "$HOME/.tun/last.json") { Get-TunnelInfo -Silent } else { @{} }
+      $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "vmIp" -NotePropertyValue $vmInfo.publicIps -Force -PassThru
+      $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "user" -NotePropertyValue $ADMIN_USER -Force -PassThru
+      $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "updated" -NotePropertyValue (Get-Date).ToString("o") -Force -PassThru
+      
+      # Pass the security privilege information to Save-TunnelInfo
+      Save-TunnelInfo -Info $tunnelInfo -SkipSecurePermissions:(-not $hasSecurityPrivilege)
       
       $env:LAST_TUNNEL_VM = $vmInfo.publicIps
     }
 
-    # Copy module files with error handling
+    # Copy module files with error handling and ensure they're always updated
     try {
+      # Always update the module files to ensure latest version
+      Write-Host "[INFO] Updating module files in $tunDir..." -ForegroundColor Cyan
+      
+      # Create backup of existing files before overwriting
+      if (Test-Path "$tunDir/TunModule.psm1") {
+        Copy-Item -Path "$tunDir/TunModule.psm1" -Destination "$tunDir/TunModule.psm1.bak" -Force -ErrorAction SilentlyContinue
+      }
+      if (Test-Path "$tunDir/utils.ps1") {
+        Copy-Item -Path "$tunDir/utils.ps1" -Destination "$tunDir/utils.ps1.bak" -Force -ErrorAction SilentlyContinue
+      }
+      
+      # Copy the updated files
       Copy-Item -Path $modulePath -Destination "$tunDir/TunModule.psm1" -Force
       Copy-Item -Path $utilsPath -Destination "$tunDir/utils.ps1" -Force
+      
+      Write-Host "[INFO] Module files successfully updated" -ForegroundColor Green
     } catch {
-      Write-Warning "Could not copy module files: $($_.Exception.Message)"
+      Write-Warning "Could not update module files: $($_.Exception.Message)"
     }
     
     # Create or update tunnel config

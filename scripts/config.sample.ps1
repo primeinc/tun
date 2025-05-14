@@ -26,3 +26,7 @@ $STACK_NAME = "sirtunnel-stack"
 
 # GitHub repository for install script URL (update in main.bicep as well)
 $GITHUB_REPO = "YOUR_USERNAME/YOUR_REPO"
+
+# Optional IP override for DryRun mode
+# $VM_IP_OVERRIDE = "20.30.40.50"  # Uncomment and set your VM's IP here
+

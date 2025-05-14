@@ -146,6 +146,26 @@ If you want to set up the local module files without actually deploying to Azure
 .\scripts\redeploy-extension.ps1 -DryRun
 ```
 
+You can also specify a specific IP address to use with the `-IpOverride` parameter:
+
+```powershell
+# Set up local files using a specific IP address
+.\scripts\redeploy-extension.ps1 -DryRun -IpOverride "20.30.40.50"
+```
+
+For persistent configuration, add the IP override to your config.ps1:
+
+```powershell
+# In config.ps1
+$VM_IP_OVERRIDE = "20.30.40.50"
+```
+
+The script will intelligently find the best IP to use in this priority order:
+1. `-IpOverride` parameter (if provided)
+2. `$VM_IP_OVERRIDE` from config.ps1 (if defined)
+3. Existing tunnel info from last.json (if available)
+4. VM name as a last resort placeholder
+
 This is useful for:
 - Local development and testing
 - Setting up the SirTunnel module when you already know the VM IP
@@ -156,7 +176,7 @@ This is useful for:
 The `-DryRun` mode will:
 1. Skip all Azure operations (no CustomScript extension deployment)
 2. Set up all local files and PowerShell module components
-3. Use placeholder values for configuration settings
+3. Use existing or override IP values rather than placeholder values
 4. Skip secure permission settings that would require administrator access
 
 ### Force Redeployment
