@@ -1,34 +1,21 @@
 
 
-<#
-  Script: deploy.ps1
-  Purpose: Full deployment and selective CustomScript extension redeploy for SirTunnel.
-  Author: ruthlessly strategic refactor directive
+# PowerShell deployment script for SirTunnel Azure infrastructure
 
-  Supports:
-    - Full deployment (Bicep)
-    - Targeted extension-only redeploy with `-UpdateExtensionOnly` or `-U`
-    - SSH key validation and injection
-    - Verbose and WhatIf passthrough
-    - Extension status checks with intelligent redeploy prompts
-#>
+# Source configuration variables
+$configFile = Join-Path $PSScriptRoot "config.ps1"
+if (Test-Path $configFile) {
+    . $configFile
+} else {
+    Write-Error "Configuration file not found at $configFile. Please create it based on config.sample.ps1."
+    exit 1
+}
 
-param(
-  [switch] $UpdateExtensionOnly,
-  [switch] $U,
-  [switch] $WhatIf,
-  [switch] $Verbose
-)
+# Check if required variables are set
+$requiredVars = @('LOCATION', 'VM_RG_NAME', 'ADMIN_USER', 'SSH_PUB_KEY_PATH', 
+                 'DNS_ZONE_NAME', 'DNS_ZONE_RG', 'STATIC_PIP_NAME', 'STATIC_PIP_RG', 'STACK_NAME', 'GITHUB_REPO')
 
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-
-# -- Load config (source of truth) --
-function Load-DeploymentConfig {
-  . "$PSScriptRoot/config.ps1"
-
-  # Validate required vars
-  foreach ($var in 'GITHUB_REPO','VM_NAME','VM_RG_NAME','LOCATION','ADMIN_USER','SSH_PUB_KEY_PATH','DNS_ZONE_RG','DNS_ZONE_NAME','STATIC_PIP_NAME','STATIC_PIP_RG') {
+foreach ($var in $requiredVars) {
     if (-not (Get-Variable -Name $var -ErrorAction SilentlyContinue)) {
       throw "Missing required config value: $var"
     }
@@ -43,111 +30,21 @@ function Load-DeploymentConfig {
     throw "SSH public key file is empty: $SSH_PUB_KEY_PATH"
   }
   $script:ResolvedSshKey = $key
-}
 
-# -- Deploy Bicep template (full infra) --
-function Invoke-BicepDeployment {
-  if ($Verbose) { Write-Host "[INFO] Starting full Bicep deployment..." }
+# Ensure resource group exists
+Write-Host "Ensuring resource group exists: $VM_RG_NAME..."
+az group create --name $VM_RG_NAME --location $LOCATION --output none
 
-  # Ensure resource group exists
-  if ($Verbose) { Write-Host "[INFO] Ensuring resource group exists: $VM_RG_NAME" }
-  az group create --name $VM_RG_NAME --location $LOCATION --output none | Out-Null
-
-  # Deploy Bicep template with all required parameters
-  $bicepPath = Join-Path $PSScriptRoot "..\infra\main.bicep"
-  $deployParams = @(
-    "--name", "sirtunnel-deploy-$(Get-Date -UFormat %s)",
-    "--resource-group", $VM_RG_NAME,
-    "--template-file", $bicepPath,
-    "--parameters",
-      "location=$LOCATION",
-      "adminUsername=$ADMIN_USER",
-      "adminPublicKey=$ResolvedSshKey",
-      "dnsZoneName=$DNS_ZONE_NAME",
-      "dnsZoneResourceGroupName=$DNS_ZONE_RG",
-      "vmName=$VM_NAME",
-      "githubRepo=$GITHUB_REPO",
-      "staticPipName=$STATIC_PIP_NAME",
-      "staticPipResourceGroupName=$STATIC_PIP_RG"
-  )
-  if ($WhatIf) { $deployParams += '--what-if' }
-  if ($Verbose) { $deployParams += '--verbose' }
-
-  az deployment group create @deployParams
-}
-
-# -- Deploy only CustomScript extension --
-function Invoke-ExtensionOnlyUpdate {
-  if ($Verbose) { Write-Host "[INFO] Performing extension-only redeploy..." }
-
-  $fileUris = @(
-    "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/install.sh",
-    "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/run_server.sh",
-    "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/caddy_config.json",
-    "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/sirtunnel.py"
-  )
-  $settings = @{ fileUris = $fileUris; skipDos2Unix = $false }
-  $protected = @{ commandToExecute = "bash install.sh $DNS_ZONE_RG $DNS_ZONE_NAME" }
-
-  # Check extension status
-  $existing = $null
-  try {
-    $existing = az vm extension show `
-      --resource-group $VM_RG_NAME `
-      --vm-name $VM_NAME `
-      --name install-sirtunnel-caddy `
-      --only-show-errors `
-      --output json | ConvertFrom-Json
-  } catch { $existing = $null }
-
-  $status = $existing?.provisioningState
-  if ($Verbose -and $status) { Write-Host "[INFO] Existing extension state: $status" }
-
-  if ($status -eq 'Succeeded') {
-    $confirm = Read-Host "Redeploy extension? (y/N)"
-    if ($confirm -ne 'y') { return }
-  }
-  elseif ($status -eq 'Failed') {
-    $confirm = Read-Host "Extension failed. [R]edeploy, [D]elete & redeploy, or [S]kip?"
-    switch ($confirm.ToLower()) {
-      'r' { }
-      'd' {
-        az vm extension delete `
-          --resource-group $VM_RG_NAME `
-          --vm-name $VM_NAME `
-          --name install-sirtunnel-caddy | Out-Null
-      }
-      default { if ($Verbose) { Write-Host "[INFO] Skipping extension redeploy." }; return }
+# Read SSH Public Key
+if (Test-Path $SSH_PUB_KEY_PATH) {
+    $SSH_PUB_KEY = Get-Content $SSH_PUB_KEY_PATH -Raw
+    if ([string]::IsNullOrEmpty($SSH_PUB_KEY)) {
+        Write-Error "SSH public key file is empty: $SSH_PUB_KEY_PATH"
+        exit 1
     }
-  }
-
-  az vm extension set `
-    --resource-group $VM_RG_NAME `
-    --vm-name $VM_NAME `
-    --name install-sirtunnel-caddy `
-    --publisher Microsoft.Azure.Extensions `
-    --version 2.1 `
-    --settings (ConvertTo-Json $settings -Depth 5) `
-    --protected-settings (ConvertTo-Json $protected -Depth 5) `
-    $(if ($WhatIf) { "--what-if" }) `
-    $(if ($Verbose) { "--verbose" }) `
-    --only-show-errors
-}
-
-# -- Main execution flow --
-try {
-  Load-DeploymentConfig
-
-  if ($UpdateExtensionOnly -or $U) {
-    Invoke-ExtensionOnlyUpdate
-  }
-  else {
-    Invoke-BicepDeployment
-  }
-}
-catch {
-  Write-Error "[FATAL] $_"
-  exit 1
+} else {
+    Write-Error "SSH public key file not found: $SSH_PUB_KEY_PATH"
+    exit 1
 }
 
 # Check existing deployment stack status

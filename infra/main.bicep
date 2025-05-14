@@ -148,7 +148,13 @@ resource virtualMachine 'Microsoft.Compute/virtualMachines@2024-03-01' = {
   }
   properties: {
     hardwareProfile: {
+      // Use a larger SKU for faster provisioning during debug
       vmSize: vmSize
+    }
+    diagnosticsProfile: {
+      bootDiagnostics: {
+        enabled: true
+      }
     }
     osProfile: {
       computerName: vmName
@@ -202,6 +208,10 @@ module dnsRoleAssignment 'modules/dns-role-assignment.bicep' = {
 }
 
 // --- VM Extension for Setup ---
+// VM Extension for Setup intentionally removed from Bicep critical path.
+// The CustomScript extension will be applied post-provision via az vm extension set, not in the Bicep deployment.
+// If you want to keep the resource for reference, comment it out as below:
+/*
 resource vmExtension 'Microsoft.Compute/virtualMachines/extensions@2024-03-01' = {
   parent: virtualMachine
   name: 'install-sirtunnel-caddy'
@@ -228,6 +238,7 @@ resource vmExtension 'Microsoft.Compute/virtualMachines/extensions@2024-03-01' =
     dnsRoleAssignment
   ]
 }
+*/
 
 // --- Outputs ---
 output publicIPAddress string = staticPip.properties.ipAddress
