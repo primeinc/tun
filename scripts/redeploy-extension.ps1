@@ -40,7 +40,8 @@ try {
     --output json | ConvertFrom-Json
 } catch { $existing = $null }
 
-$status = $existing?.provisioningState
+# Safely access provisioningState without using the null-conditional operator
+$status = if ($null -ne $existing) { $existing.provisioningState } else { $null }
 if ($status -eq 'Failed' -and -not $Force) {
   Write-Host "[WARN] Extension is in a failed state. Use -Force to delete and redeploy." -ForegroundColor Yellow
   $confirm = Read-Host "Delete and redeploy extension? (y/N)"
@@ -57,13 +58,30 @@ if ($status -eq 'Failed' -and $Force) {
 
 # Redeploy the extension
 Write-Host "[INFO] Redeploying CustomScript extension..." -ForegroundColor Cyan
-az vm extension set `
-  --name install-sirtunnel-caddy `
-  --publisher Microsoft.Azure.Extensions `
-  --version 2.1 `
-  --resource-group $VM_RG_NAME `
-  --vm-name $VM_NAME `
-  --settings (ConvertTo-Json $settings -Depth 5) `
-  --protected-settings (ConvertTo-Json $protected -Depth 5)
+
+# Create temporary files for settings and protected settings
+$tempSettingsFile = [System.IO.Path]::GetTempFileName()
+$tempProtectedFile = [System.IO.Path]::GetTempFileName()
+
+try {
+  # Convert settings and protected settings to JSON and save to temp files
+  ConvertTo-Json $settings -Depth 5 | Out-File $tempSettingsFile -Encoding UTF8
+  ConvertTo-Json $protected -Depth 5 | Out-File $tempProtectedFile -Encoding UTF8
+
+  # Use the temp files with az cli
+  az vm extension set `
+    --name install-sirtunnel-caddy `
+    --publisher Microsoft.Azure.Extensions `
+    --version 2.1 `
+    --resource-group $VM_RG_NAME `
+    --vm-name $VM_NAME `
+    --settings "@$tempSettingsFile" `
+    --protected-settings "@$tempProtectedFile"
+} 
+finally {
+  # Clean up temp files
+  if (Test-Path $tempSettingsFile) { Remove-Item -Path $tempSettingsFile -Force }
+  if (Test-Path $tempProtectedFile) { Remove-Item -Path $tempProtectedFile -Force }
+}
 
 Write-Host "[INFO] Extension redeploy complete. Check /lib/waagent/custom-script/handler.log on the VM for logs."
