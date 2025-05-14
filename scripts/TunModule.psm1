@@ -53,7 +53,6 @@ function New-Tunnel {
                 }
             }
         }
-        
         # If still no IP, we can't proceed
         if (-not $ip) {
             Write-Host "[ERR] No tunnel VM IP found. Cannot proceed." -ForegroundColor Red
@@ -64,10 +63,13 @@ function New-Tunnel {
         Write-Host "[*] Running diagnostics on $ip..." -ForegroundColor Cyan
 
         # Single line command with semicolons to avoid CRLF issues
-        $logCommand = "echo '===== handler.log ====='; sudo tail -n 50 /var/lib/waagent/custom-script/handler.log || echo 'File not found'; " +
+        $logCommand = "echo '===== handler.log ====='; sudo tail -n 100 /log/azure/custom-script/handler.log || echo 'File not found'; " +
                       "echo ''; echo '===== stdout ====='; sudo tail -n 20 /var/lib/waagent/custom-script/download/0/stdout || echo 'File not found'; " +
                       "echo ''; echo '===== stderr ====='; sudo tail -n 20 /var/lib/waagent/custom-script/download/0/stderr || echo 'File not found'; " +
+                      "echo ''; echo '===== caddy logs ====='; sudo journalctl -u caddy --no-pager -n 20 || echo 'Caddy logs not available'; " +
+                      "echo ''; echo '===== sirtunnel service ====='; sudo systemctl status sirtunnel || echo 'SirTunnel status not available'; " +
                       "echo ''; echo '===== uptime/hostname ====='; uptime && hostname"
+
 
         ssh "$user@$ip" $logCommand
         return
