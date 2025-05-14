@@ -66,13 +66,18 @@ Run the preparation script to ensure all files are ready:
 
 ### 6. Deploy SirTunnel
 
-Deploy the infrastructure:
+Deploy the infrastructure and configure the VM:
 
 ```powershell
 .\scripts\deploy.ps1
 ```
 
-This will take 5-10 minutes. Once complete, you'll see output with connection information.
+This will:
+1. Deploy the core infrastructure using Bicep (VM, networking, etc.)
+2. Automatically execute the `redeploy-extension.ps1` script to configure the VM
+3. Display connection information once complete
+
+The deployment takes 5-10 minutes. The two-step approach ensures reliable provisioning by separating infrastructure deployment from configuration.
 
 ### 7. Test Your Deployment
 
@@ -84,7 +89,23 @@ Test that everything is configured correctly:
 
 ## Using SirTunnel
 
-Once deployed, you can create tunnels from your local machine:
+### Simple Method (Recommended)
+
+After deployment, the script provides a PowerShell function you can add to your profile for easy tunnel creation:
+
+```powershell
+# Add the function to your PowerShell profile
+notepad $PROFILE  # Copy the function provided in the deployment output
+
+# Then use the simplified syntax:
+tun api 3000                # Exposes localhost:3000 as https://api.tun.yourdomain.com
+tun dashboard 8080          # Exposes localhost:8080 as https://dashboard.tun.yourdomain.com
+tun api 3000 192.168.1.10   # Exposes 192.168.1.10:3000 as https://api.tun.yourdomain.com
+```
+
+### Manual Method
+
+Alternatively, you can create tunnels from your local machine with the full SSH command:
 
 ```powershell
 # General syntax:
@@ -94,7 +115,7 @@ ssh -t -R <REMOTE_PORT>:<LOCAL_HOST>:<LOCAL_PORT> <VM_USER>@<VM_PUBLIC_IP> sirtu
 ssh -t -R 9001:localhost:3000 azureuser@<VM_PUBLIC_IP> sirtunnel.py api.tun.example.com 9001
 ```
 
-Press `Ctrl+C` to stop the tunnel.
+Press `Ctrl+C` to stop the tunnel with either method.
 
 ## Teardown
 

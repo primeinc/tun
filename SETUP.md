@@ -18,14 +18,24 @@ Networking Infrastructure: A dedicated Virtual Network (VNet) and subnet are cre
 
 Virtual Machine (VM): A cost-effective Standard_B1s Ubuntu Server VM (sirtunnel-vm) is deployed. SSH access is enabled using public key authentication for secure remote management. A system-assigned managed identity is enabled on the VM.
 
-VM Configuration (Custom Script Extension): A VM extension executes a custom script (install.sh) upon VM creation. This script handles the installation and initial configuration of Caddy and the SirTunnel Python script. Specifically, `install.sh` performs the following actions:
+VM Configuration (Two-Step Deployment): The solution uses a two-step deployment approach for improved reliability:
+1. First, the core infrastructure (VM, networking, etc.) is provisioned via Bicep and Azure Deployment Stacks
+2. Then, a separate CustomScript extension is deployed using the `redeploy-extension.ps1` script that's automatically called after successful deployment
+
+This two-step approach offers several advantages:
+- Separates infrastructure provisioning from configuration
+- Provides better error handling and recovery options
+- Allows independent retries of the extension if needed
+- Prevents configuration failures from affecting the core infrastructure
+
+The `redeploy-extension.ps1` script deploys a CustomScript extension that executes `install.sh`, which:
     *   Downloads and installs the Caddy web server binary to `/usr/local/bin/caddy`.
     *   Grants Caddy the capability to bind to privileged ports (e.g., 443).
     *   Creates the directories `/opt/sirtunnel/` and `/etc/caddy/`.
-    *   Moves the `run_server.sh` and `sirtunnel.py` scripts (downloaded via `fileUris` in the Bicep template) to `/opt/sirtunnel/` and makes them executable.
+    *   Moves the `run_server.sh` and `sirtunnel.py` scripts (downloaded via `fileUris`) to `/opt/sirtunnel/` and makes them executable.
     *   Moves the `caddy_config.json` (also downloaded via `fileUris`) to `/etc/caddy/caddy_config.json`.
     *   Sets `HOME=/root` for Caddy's operational needs.
-    After `install.sh` completes, the Custom Script Extension then executes `/opt/sirtunnel/run_server.sh` to start the Caddy server.
+    After `install.sh` completes, the CustomScript Extension then executes `/opt/sirtunnel/run_server.sh` to start the Caddy server.
 
 Caddy Web Server: Caddy acts as the reverse proxy and TLS termination point. It listens on port 443, automatically obtains and renews TLS certificates (including a wildcard certificate for *.tun.title.dev) from Let's Encrypt using the DNS-01 challenge via an Azure DNS plugin. Its configuration (`/etc/caddy/caddy_config.json`) is dynamically updated by the `sirtunnel.py` script (located at `/opt/sirtunnel/sirtunnel.py`) via its local admin API.
 
@@ -190,12 +200,15 @@ resource assignDnsRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-VM Extension (Custom Script): Executes the install.sh script to set up Caddy and SirTunnel. It passes necessary information like the Azure Subscription ID and DNS Zone Resource Group name to the script, which are needed for Caddy's Azure DNS provider configuration.
+VM Extension (Post-Deployment): The VM extension is intentionally removed from the main Bicep file and applied as a post-deployment step for improved reliability. The `deploy.ps1` script automatically calls `redeploy-extension.ps1` after successful infrastructure deployment. This approach allows for more flexible error handling and recovery.
+
+The commented reference implementation in main.bicep provides documentation for how the extension would be configured:
 
 Code snippet
+/*
 resource vmExtension 'Microsoft.Compute/virtualMachines/extensions@2024-03-01' = {
   parent: virtualMachine
-  name: 'installSirtunnelCaddy'
+  name: 'install-sirtunnel-caddy'
   location: location
   properties: {
     publisher: 'Microsoft.Azure.Extensions'
@@ -203,16 +216,23 @@ resource vmExtension 'Microsoft.Compute/virtualMachines/extensions@2024-03-01' =
     typeHandlerVersion: '2.1'
     autoUpgradeMinorVersion: true
     settings: {
-      // Use commandToExecute for inline script or fileUris for external script
-      // Passing parameters needed by install.sh for Caddy config
-      'commandToExecute': 'bash -c "$(curl -fsSL https://raw.githubusercontent.com/path/to/your/install.sh) -- ${subscription().subscriptionId} ${dnsZoneResourceGroupName}"'
-      // Alternatively, upload install.sh and use fileUris:
-      // 'fileUris':,
-      // 'commandToExecute': 'bash install.sh ${subscription().subscriptionId} ${dnsZoneResourceGroupName}'
+      skipDos2Unix: false
+      fileUris: [
+        'https://raw.githubusercontent.com/${githubRepo}/main/scripts/install.sh',
+        'https://raw.githubusercontent.com/${githubRepo}/main/scripts/run_server.sh',
+        'https://raw.githubusercontent.com/${githubRepo}/main/scripts/caddy_config.json',
+        'https://raw.githubusercontent.com/${githubRepo}/main/scripts/sirtunnel.py'
+      ]
     }
-    // protectedSettings could be used for secrets if needed
+    protectedSettings: {
+      commandToExecute: 'bash install.sh ${subscription().subscriptionId} ${dnsZoneResourceGroupName} ${dnsZoneName}'
+    }
   }
+  dependsOn: [
+    dnsRoleAssignment
+  ]
 }
+*/
 
 Note: The commandToExecute example uses curl to fetch the script directly. For production, hosting install.sh securely (e.g., Azure Storage Blob with SAS token, GitHub Raw with caution) and using fileUris is generally preferred.
 

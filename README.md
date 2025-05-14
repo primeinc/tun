@@ -39,12 +39,12 @@ See the [Quickstart Guide](QUICKSTART.md) for step-by-step instructions.
    .\scripts\create-static-ip.ps1
    .\scripts\create-dns-record.ps1
    .\scripts\prepare-deployment.ps1
-   .\scripts\deploy.ps1
+   .\scripts\deploy.ps1  # Handles both infrastructure deployment and VM configuration
    ```
-4. Use the tunneling service:
+4. Use the tunneling service (simplified with provided alias):
    ```powershell
-   # Replace with values from deployment output
-   ssh -t -R 9001:localhost:3000 azureuser@<VM_PUBLIC_IP> sirtunnel.py api.tun.title.dev 9001
+   # Add the alias function to your PowerShell profile as shown in deployment output
+   tun api 3000  # Expose localhost:3000 as https://api.tun.yourdomain.com
    ```
 
 ## Repository Structure
@@ -68,7 +68,8 @@ tun/
 │   ├── config.ps1                # Your personal configuration (gitignored)
 │   ├── create-dns-record.ps1     # Script to create wildcard DNS record
 │   ├── create-static-ip.ps1      # Script to create static public IP
-│   ├── deploy.ps1                # Main deployment script
+│   ├── deploy.ps1                # Main deployment script (infrastructure)
+│   ├── redeploy-extension.ps1    # VM extension deployment script (configuration)
 │   ├── install.sh                # VM configuration script
 │   ├── prepare-deployment.ps1    # Prepare files for deployment
 │   ├── sirtunnel.py              # Enhanced SirTunnel script
