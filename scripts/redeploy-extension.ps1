@@ -32,13 +32,24 @@ $protected = @{
 # Check current extension state
 $existing = $null
 try {
-  $existing = az vm extension show `
+  Write-Host "[INFO] Checking for existing extension..." -ForegroundColor Cyan
+  $existingResult = az vm extension show `
     --resource-group $VM_RG_NAME `
     --vm-name $VM_NAME `
     --name customScript `
-    --only-show-errors `
-    --output json | ConvertFrom-Json
-} catch { $existing = $null }
+    --output json 2>&1
+  
+  # Check if the command was successful
+  if ($LASTEXITCODE -eq 0) {
+    $existing = $existingResult | ConvertFrom-Json
+    Write-Host "[INFO] Found existing extension with status: $($existing.provisioningState)" -ForegroundColor Cyan
+  } else {
+    Write-Host "[INFO] No existing extension found, will deploy new one" -ForegroundColor Cyan
+  }
+} catch {
+  Write-Host "[INFO] Error checking extension state, assuming it doesn't exist: $($_.Exception.Message)" -ForegroundColor Yellow
+  $existing = $null
+}
 
 # Safely access provisioningState without using the null-conditional operator
 $status = if ($null -ne $existing) { $existing.provisioningState } else { $null }
@@ -51,10 +62,15 @@ if ($status -eq 'Failed' -and -not $Force) {
 # Always delete the existing extension if it exists before redeploying
 if ($null -ne $existing) {
   Write-Host "[INFO] Deleting existing extension before redeploy..." -ForegroundColor Cyan
-  az vm extension delete `
-    --resource-group $VM_RG_NAME `
-    --vm-name $VM_NAME `
-    --name customScript | Out-Null
+  try {
+    az vm extension delete `
+      --resource-group $VM_RG_NAME `
+      --vm-name $VM_NAME `
+      --name customScript | Out-Null
+    Write-Host "[INFO] Successfully deleted existing extension" -ForegroundColor Green
+  } catch {
+    Write-Host "[WARN] Failed to delete extension, but continuing with deployment: $($_.Exception.Message)" -ForegroundColor Yellow
+  }
 }
 
 # Redeploy the extension
@@ -67,13 +83,17 @@ $tempProtectedFile = [System.IO.Path]::GetTempFileName()
 try {
   # Convert settings and protected settings to JSON and save to temp files
   ConvertTo-Json $settings -Depth 5 | Out-File $tempSettingsFile -Encoding UTF8
-  ConvertTo-Json $protected -Depth 5 | Out-File $tempProtectedFile -Encoding UTF8  # Use the temp files with az cli
+  ConvertTo-Json $protected -Depth 5 | Out-File $tempProtectedFile -Encoding UTF8
+  
+  # Use the temp files with az cli
+  # Note: For Linux VMs, use Microsoft.Azure.Extensions as the publisher
   az vm extension set `
     --name customScript `
     --publisher Microsoft.Azure.Extensions `
     --version 2.1 `
     --resource-group $VM_RG_NAME `
     --vm-name $VM_NAME `
+    --force `
     --settings "@$tempSettingsFile" `
     --protected-settings "@$tempProtectedFile"
 } 
@@ -88,25 +108,43 @@ Write-Host "[INFO] Extension redeploy complete. Check /lib/waagent/custom-script
 # Get VM public IP and output alias creation command
 try {
   $vmInfo = az vm show --resource-group $VM_RG_NAME --name $VM_NAME --show-details --query "{name:name, publicIps:publicIps}" --output json | ConvertFrom-Json
-  
-  if ($vmInfo -and $vmInfo.publicIps) {
+    if ($vmInfo -and $vmInfo.publicIps) {
     Write-Host "`nTo create an easy-to-use alias for tunneling, add the following to your PowerShell profile:" -ForegroundColor Green
-    Write-Host "--------------------------------------------------------------------------------" -ForegroundColor DarkGray
-    $functionText = @"
+    Write-Host "--------------------------------------------------------------------------------" -ForegroundColor DarkGray    $functionText = @"
 function Create-Tunnel {
     param(
         [Parameter(Mandatory=`$true)][string]`$Subdomain,
         [Parameter(Mandatory=`$true)][int]`$LocalPort,
         [string]`$LocalHost = "localhost",
-        [int]`$RemotePort = `$LocalPort + 6000
+        [int]`$RemotePort = `$LocalPort + 6000,
+        [switch]`$Force
     )
     
     `$domain = "$DNS_ZONE_NAME"
     `$user = "$ADMIN_USER"
     `$ip = "$($vmInfo.publicIps)"
     
-    Write-Host "Creating tunnel: https://`$Subdomain.tun.`$domain -> `$LocalHost:`$LocalPort" -ForegroundColor Cyan
-    ssh -t -R `${RemotePort}:`$LocalHost:`$LocalPort `$user@`$ip sirtunnel.py `$Subdomain.tun.`$domain `$RemotePort
+    # Handle host key issues if requested via Force
+    if (`$Force) {
+        Write-Host "Removing previous host keys for `$ip..." -ForegroundColor Yellow
+        ssh-keygen -R `$ip 2>&1 | Out-Null
+    }
+    
+    # Create tunnel display string for output
+    `$tunnelUrl = "https://`$Subdomain.tun.`$domain"
+    `$localEndpoint = "`$LocalHost```:`$LocalPort"
+    Write-Host "Creating tunnel: `$tunnelUrl -> `$localEndpoint" -ForegroundColor Cyan
+    
+    try {
+        # Use StrictHostKeyChecking=accept-new to automatically add new host keys
+        # This eliminates the "Host key verification failed" errors when VM is redeployed
+        ssh -o "StrictHostKeyChecking=accept-new" -t -R `${RemotePort}```:`$LocalHost```:`$LocalPort `$user@`$ip /opt/sirtunnel/sirtunnel.py `$Subdomain.tun.`$domain `$RemotePort
+    }
+    catch {
+        Write-Host "Error establishing tunnel: `$(`$_.Exception.Message)" -ForegroundColor Red
+        Write-Host "If you're seeing host key verification errors, try using the -Force switch:" -ForegroundColor Yellow
+        Write-Host "  tun `$Subdomain `$LocalPort -Force" -ForegroundColor Yellow
+    }
 }
 
 Set-Alias -Name tun -Value Create-Tunnel
