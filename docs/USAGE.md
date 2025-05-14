@@ -40,6 +40,99 @@ ssh -t -R 9002:localhost:8080 azureuser@<VM_PUBLIC_IP> sirtunnel.py api.tun.titl
 ssh -t -R 9003:192.168.1.100:8000 azureuser@<VM_PUBLIC_IP> sirtunnel.py internal.tun.title.dev 9003
 ```
 
+## Using the PowerShell Module
+
+For Windows users (or anyone with PowerShell Core), there's a convenient PowerShell module for managing tunnels.
+
+### Installation
+
+The SirTunnel module is automatically installed to `~/.tun/` when you run the `redeploy-extension.ps1` script. To load it, simply add this line to your PowerShell profile:
+
+```powershell
+Import-Module "$HOME/.tun/TunModule.psm1"
+```
+
+### Creating a Tunnel
+
+Once the module is loaded, you can use the `tun` command alias:
+
+```powershell
+# Basic usage
+tun api 3000               # Exposes localhost:3000 as https://api.tun.<your-domain>
+
+# With custom local host (not localhost)
+tun api 3000 192.168.1.10  # Exposes 192.168.1.10:3000 as https://api.tun.<your-domain>
+
+# Force override SSH host keys (useful after VM redeployment)
+tun api 3000 -Force
+```
+
+### Persistent State Management
+
+The tunnel tool maintains persistent state across PowerShell sessions. When you create a tunnel, its details are automatically saved to `~/.tun/last.json`. This means:
+
+1. You don't need to rely on environment variables anymore
+2. The tunnel command will work reliably across terminal sessions and reboots
+
+### Viewing Tunnel Information
+
+To see information about the active tunnel:
+
+```powershell
+tun-ls
+```
+
+### Running Diagnostics
+
+To run diagnostics on the tunnel VM:
+
+```powershell
+tun-diag
+```
+
+### After VM Redeployment
+
+If you redeploy your Azure VM, the tunnel state will automatically be updated when you run the `redeploy-extension.ps1` script.
+
+### Persistent State Management
+
+The tunnel tool now maintains persistent state across PowerShell sessions. When you create a tunnel, its details are automatically saved to `~/.tun/last.json`. This means:
+
+1. You don't need to rely on environment variables like `$env:LAST_TUNNEL_VM` anymore
+2. The tunnel command will work reliably across terminal sessions and reboots
+3. You can easily view your current tunnel state
+
+### Viewing Tunnel Information
+
+To see information about the active tunnel:
+
+```powershell
+ls-tun
+```
+
+This will display details such as:
+- The tunnel URL
+- Local port and host
+- Remote VM IP and port
+- When the tunnel was created
+
+### Running Diagnostics
+
+If you encounter issues, you can run diagnostics on the tunnel VM:
+
+```powershell
+tun diag
+```
+
+This will show:
+- Extension installation logs
+- Server status
+- Uptime information
+
+### After VM Redeployment
+
+If you redeploy your Azure VM, your tunnel state will automatically be updated. You can continue using the `tun` command without manually setting any environment variables.
+
 ## Managing Tunnels
 
 ### Starting a Tunnel

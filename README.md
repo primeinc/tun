@@ -13,6 +13,16 @@ The architecture leverages:
 - Wildcard DNS resolution for a dedicated subdomain (*.tun.title.dev)
 - Automated configuration of Caddy web server and the SirTunnel Python script
 - Azure Deployment Stacks for clean lifecycle management
+- Persistent state management for reliable tunnel operations
+
+## Features
+
+- **Zero-Trust Security**: All tunnels are secured with HTTPS via automatic Caddy configuration
+- **Wildcard DNS**: Use any subdomain with your dedicated tunnel domain (e.g., api.tun.example.com)
+- **PowerShell Module**: Convenient commands for managing tunnels in Windows environments
+- **Persistent State**: Tunnel information is preserved across terminal sessions and system reboots
+- **Diagnostics**: Built-in tools for troubleshooting tunnel connectivity issues
+- **Cost-Effective**: Deploy on minimal Azure infrastructure (as low as $15/month)
 
 ## Quick Start
 

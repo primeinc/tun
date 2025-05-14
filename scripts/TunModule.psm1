@@ -1,12 +1,16 @@
+# SirTunnel PowerShell Module
+
 # Import utility functions
-$utilsPath = Join-Path $PSScriptRoot "utils.ps1"
+$scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
+$utilsPath = Join-Path $scriptPath "utils.ps1"
 if (Test-Path $utilsPath) {
     . $utilsPath
 } else {
-    Write-Error "Utils.ps1 not found at $utilsPath. Cannot proceed."
-    exit 1
+    Write-Error "Required utilities file not found at: $utilsPath"
+    throw "Unable to load required utility functions"
 }
 
+# Function to create a new tunnel
 function New-Tunnel {
     param(
         [Parameter(Mandatory=$true)][string]$Subdomain,
@@ -17,9 +21,10 @@ function New-Tunnel {
         [string]$Ip = ""
     )
 
-    # First try to get values from environment variables
-    $domain = "$env:DNS_ZONE_NAME"
-    $user = "$env:ADMIN_USER"
+    # First try to get values from environment variables or config
+    $config = Get-TunnelConfig
+    $domain = $config.Domain
+    $user = $config.AdminUser
     
     # Resolve the IP with fallback chain:
     # 1. If explicitly provided, use that
@@ -33,7 +38,8 @@ function New-Tunnel {
         $ip = "$env:LAST_TUNNEL_VM"
         
         # If not in env var, try to load from state file
-        if (-not $ip) {            $tunnelInfo = Get-TunnelInfo -Silent
+        if (-not $ip) {
+            $tunnelInfo = Get-TunnelInfo -Silent
             if ($tunnelInfo) {
                 $ip = $tunnelInfo.vmIp
                 # Optionally restore other settings if needed
@@ -84,12 +90,12 @@ uptime && hostname
     if ($Force) {
         Write-Host "Removing previous host keys for $ip..." -ForegroundColor Yellow
         ssh-keygen -R $ip 2>&1 | Out-Null
-    }
-
-    $tunnelUrl = "https://$Subdomain.tun.$domain"
+    }    $tunnelUrl = "https://$Subdomain.tun.$domain"
     $localEndpoint = "$LocalHost`:$LocalPort"
-    Write-Host "Creating tunnel: $tunnelUrl -> $localEndpoint" -ForegroundColor Cyan    try {
-        ssh -o "StrictHostKeyChecking=accept-new" -t -R "`$RemotePort```:`$LocalHost:$LocalPort" "$user@$ip" "/opt/sirtunnel/sirtunnel.py $Subdomain.tun.$domain $RemotePort"
+    Write-Host "Creating tunnel: $tunnelUrl -> $localEndpoint" -ForegroundColor Cyan
+    
+    try {
+        ssh -o "StrictHostKeyChecking=accept-new" -t -R "${RemotePort}:${LocalHost}:${LocalPort}" "$user@$ip" "/opt/sirtunnel/sirtunnel.py $Subdomain.tun.$domain $RemotePort"
         
         # Save successful tunnel info to persistent storage
         $tunnelInfo = @{
@@ -112,7 +118,51 @@ uptime && hostname
     }
 }
 
-# Add an alias for the Show-Tunnels function from utils.ps1
-Set-Alias -Name ls-tun -Value Show-Tunnels
+# Function to get the current configuration
+function Get-TunnelConfig {
+    $configPath = "$HOME/.tun/config.json"
+    if (Test-Path $configPath) {
+        return Get-Content $configPath | ConvertFrom-Json
+    } else {
+        # Default config with placeholders
+        return @{
+            Domain = "$env:DNS_ZONE_NAME"
+            AdminUser = "$env:ADMIN_USER"
+        }
+    }
+}
 
-Set-Alias -Name tun -Value New-Tunnel
+# Make sure Initialize-TunnelEnvironment is available in the module
+# even if utils.ps1 was not loaded correctly
+if (-not (Get-Command -Name Initialize-TunnelEnvironment -ErrorAction SilentlyContinue)) {
+    function Initialize-TunnelEnvironment {
+        # Create the .tun directory if it doesn't exist
+        $tunDir = "$HOME/.tun"
+        if (-not (Test-Path $tunDir)) { 
+            New-Item -ItemType Directory -Path $tunDir -Force | Out-Null 
+            Write-Host "[INFO] Created tunnel state directory at $tunDir" -ForegroundColor Green
+        }
+        return $tunDir
+    }
+}
+
+# Export functions
+Export-ModuleMember -Function New-Tunnel, Get-TunnelInfo, Show-Tunnels, Save-TunnelInfo, Get-TunnelConfig, Initialize-TunnelEnvironment
+# Export aliases
+New-Alias -Name tun -Value New-Tunnel -Force
+New-Alias -Name tun-ls -Value Show-Tunnels -Force
+
+# Create a script block for the diag command
+$diagScript = {
+    param($RemainderArgs)
+    New-Tunnel -Subdomain "diag"
+}
+
+# Register the script as a named function
+Set-Item -Path function:global:Invoke-TunnelDiag -Value $diagScript
+
+# Export aliases
+Export-ModuleMember -Alias tun, tun-ls
+Export-ModuleMember -Function Invoke-TunnelDiag
+New-Alias -Name tun-diag -Value Invoke-TunnelDiag -Force
+Export-ModuleMember -Alias tun-diag
