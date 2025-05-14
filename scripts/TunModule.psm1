@@ -58,8 +58,8 @@ function New-Tunnel {
             Write-Host "[ERR] No tunnel VM IP found. Cannot proceed." -ForegroundColor Red
             Write-Host "Either set the LAST_TUNNEL_VM environment variable or run redeploy-extension.ps1 first." -ForegroundColor Yellow
             return
-        }
-    }    if ($Subdomain -eq "diag") {
+        }    }    
+    if ($Subdomain -eq "diag") {
         Write-Host "[*] Running diagnostics on $ip..." -ForegroundColor Cyan
 
         # Single line command with semicolons to avoid CRLF issues
@@ -73,7 +73,9 @@ function New-Tunnel {
 
         ssh "$user@$ip" $logCommand
         return
-    }if ($RemotePort -eq 0) {
+    }
+    
+    if ($RemotePort -eq 0) {
         $RemotePort = $LocalPort + 6000
     }
     
@@ -114,21 +116,29 @@ function New-Tunnel {
         }
     }    $tunnelUrl = "https://$Subdomain.tun.$domain"
     $localEndpoint = "$LocalHost`:$LocalPort"
-    Write-Host "Creating tunnel: $tunnelUrl -> $localEndpoint" -ForegroundColor Cyan
+    Write-Host "Creating tunnel: $tunnelUrl -> $localEndpoint (remote port: $RemotePort)" -ForegroundColor Cyan
     
     try {
         # Use StrictHostKeyChecking=no if -Force is used or if we detected a potential host key issue
         # This provides more reliability by default without requiring users to remember the -Force flag
         $sshOptions = if ($Force -or $hostKeyMayNeedReset) {
-            "-o StrictHostKeyChecking=no"
+            "-o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes"
         } else {
-            "-o StrictHostKeyChecking=accept-new"
+            "-o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes"
         }
           # Use the constructed SSH options
-        # Pass LocalPort as the second argument to make the displayed port match what the user expects
-        Invoke-Expression "ssh $sshOptions -t -R ${RemotePort}:${LocalHost}:${LocalPort} ${user}@${ip} /opt/sirtunnel/sirtunnel.py $Subdomain.tun.$domain $LocalPort"
+        # Pass RemotePort as the second argument to match the actual listening port in the SSH tunnel
+        Write-Verbose "Using remote port $RemotePort for the tunnel"
+        Invoke-Expression "ssh $sshOptions -t -R ${RemotePort}:${LocalHost}:${LocalPort} ${user}@${ip} /opt/sirtunnel/sirtunnel.py $Subdomain.tun.$domain $RemotePort"
+        $exitCode = $LASTEXITCODE
         
-        # Save successful tunnel info to persistent storage
+        # Verify SSH completed successfully
+        if ($exitCode -ne 0) {
+            Write-Host "[ERR] SSH tunnel failed with exit code $exitCode" -ForegroundColor Red
+            return  # Do not proceed to save state
+        }
+        
+        # Only on success, save tunnel info to persistent storage
         $tunnelInfo = @{
             domain = "$Subdomain.tun.$domain"
             localHost = $LocalHost
@@ -141,8 +151,7 @@ function New-Tunnel {
         
         # Save to persistent file and maintain env var for backward compatibility
         Save-TunnelInfo -Info $tunnelInfo
-        $env:LAST_TUNNEL_VM = $ip
-          } catch {
+        $env:LAST_TUNNEL_VM = $ip          } catch {
         $errorMessage = $_.Exception.Message
         Write-Host "Error establishing tunnel: $errorMessage" -ForegroundColor Red
         
@@ -155,6 +164,13 @@ function New-Tunnel {
             Write-Host "Connection refused. The VM might be down or the SSH service is not running." -ForegroundColor Yellow
             Write-Host "Try redeploying the VM extension:" -ForegroundColor Yellow
             Write-Host "  ./scripts/redeploy-extension.ps1 -Force" -ForegroundColor Cyan
+        } elseif ($errorMessage -match "forward failed" -or $errorMessage -match "remote port forwarding failed") {
+            Write-Host "Remote port forwarding failed. Port $RemotePort might already be in use on the server." -ForegroundColor Yellow
+            Write-Host "Try a different port by explicitly specifying the remote port:" -ForegroundColor Yellow
+            Write-Host "  tun $Subdomain $LocalPort -RemotePort $($RemotePort + 1)" -ForegroundColor Cyan
+        } elseif ($errorMessage -match "Permission denied") {
+            Write-Host "Permission denied. Check your SSH credentials or key." -ForegroundColor Yellow
+            Write-Host "If using key authentication, ensure your key is properly configured." -ForegroundColor Yellow
         } else {
             Write-Host "Try using -Force to reset any SSH connection issues." -ForegroundColor Yellow
         }
