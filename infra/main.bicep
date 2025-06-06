@@ -111,6 +111,19 @@ resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2023-11-0
           destinationAddressPrefix: '*'
         }
       }
+      {
+        name: 'SMTP'
+        properties: {
+          priority: 1002
+          access: 'Allow'
+          direction: 'Inbound'
+          destinationPortRange: '25'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          sourceAddressPrefix: '*'
+          destinationAddressPrefix: '*'
+        }
+      }
     ]
   }
 }

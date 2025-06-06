@@ -1,0 +1,2 @@
+# Python dependencies for SMTP sink server
+aiosmtpd==1.4.6

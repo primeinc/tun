@@ -24,7 +24,21 @@ echo "[*] Creating application and configuration directories..."
 install -d -m 755 "$sirtunnel_app_dir"
 install -d -m 755 "$caddy_config_dir"
 
-# 3. Install Caddy binary
+# 3. Install Python dependencies for SMTP sink
+echo "[*] Installing Python dependencies..."
+apt-get update
+apt-get install -y python3 python3-pip
+
+# Install from requirements file if it exists, otherwise install directly
+if [[ -f "${script_dir}/requirements-smtp.txt" ]]; then
+  echo "[*] Installing from requirements-smtp.txt..."
+  pip3 install -r "${script_dir}/requirements-smtp.txt"
+else
+  echo "[*] Installing aiosmtpd directly..."
+  pip3 install aiosmtpd==1.4.6
+fi
+
+# 4. Install Caddy binary
 echo "[*] Installing Caddy v${caddyVersion}..."
 curl -fsSLO "https://github.com/caddyserver/caddy/releases/download/v${caddyVersion}/${caddyGz}"
 tar -xf "$caddyGz"
@@ -35,7 +49,7 @@ if ! setcap 'cap_net_bind_service=+ep' /usr/local/bin/caddy 2>/dev/null; then
   echo "[!] Warning: setcap failed. Caddy may need sudo to bind to ports <1024."
 fi
 
-# 4. Move application scripts
+# 5. Move application scripts
 echo "[*] Deploying scripts..."
 if [[ -f "${script_dir}/run_server.sh" ]]; then
   install -m 755 "${script_dir}/run_server.sh" "$run_script"
@@ -65,11 +79,18 @@ else
   echo "[!] Missing caddy_config.json. Caddy may fail to start." >&2
 fi
 
-# 5. Set environment for Caddy (if needed for TLS)
+# Deploy SMTP sink script
+if [[ -f "${script_dir}/smtp_sink.py" ]]; then
+  install -m 755 "${script_dir}/smtp_sink.py" "${sirtunnel_app_dir}/smtp_sink.py"
+else
+  echo "[!] Missing smtp_sink.py" >&2
+fi
+
+# 6. Set environment for Caddy (if needed for TLS)
 export HOME=/root
 
-# 6. Create systemd service
-echo "[*] Creating systemd service..."
+# 7. Create systemd services
+echo "[*] Creating systemd services..."
 cat > "$service_file" <<EOF
 [Unit]
 Description=SirTunnel Proxy Service
@@ -85,11 +106,51 @@ WorkingDirectory=$sirtunnel_app_dir
 WantedBy=multi-user.target
 EOF
 
-# 7. Reload and start the service
-echo "[*] Enabling and starting sirtunnel..."
+# Create SMTP sink service
+smtp_service_file="/etc/systemd/system/smtpsink.service"
+cat > "$smtp_service_file" <<EOF
+[Unit]
+Description=Temporary SMTP Sink Service
+After=network.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 ${sirtunnel_app_dir}/smtp_sink.py
+Restart=on-failure
+RestartSec=5
+User=root
+WorkingDirectory=$sirtunnel_app_dir
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+# Resource limits
+LimitNOFILE=1024
+MemoryLimit=512M
+CPUQuota=50%
+
+# Capability to bind to port 25
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 8. Reload and start the services
+echo "[*] Enabling and starting services..."
 systemctl daemon-reexec
 systemctl daemon-reload
 systemctl enable sirtunnel.service
+systemctl enable smtpsink.service
 
 if systemctl is-active --quiet sirtunnel.service; then
   systemctl restart sirtunnel.service
@@ -97,9 +158,23 @@ else
   systemctl start sirtunnel.service
 fi
 
-# 8. Show status and logs
-echo "[*] Checking sirtunnel service status..."
+if systemctl is-active --quiet smtpsink.service; then
+  systemctl restart smtpsink.service
+else
+  systemctl start smtpsink.service
+fi
+
+# 9. Show status and logs
+echo "[*] Checking service statuses..."
 systemctl status sirtunnel.service --no-pager || true
 journalctl -u sirtunnel.service --no-pager -n 20 || true
 
-echo "[*] SirTunnel setup completed successfully."
+echo "[*] Checking SMTP sink service status..."
+systemctl status smtpsink.service --no-pager || true
+journalctl -u smtpsink.service --no-pager -n 10 || true
+
+# 10. Block port 25 by default with iptables
+echo "[*] Blocking port 25 by default (will be opened when tunnel is active)..."
+iptables -I INPUT -p tcp --dport 25 -j DROP
+
+echo "[*] SirTunnel and SMTP sink setup completed successfully."
