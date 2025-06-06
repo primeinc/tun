@@ -61,7 +61,9 @@ $settings = @{
     "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/install.sh",
     "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/run_server.sh",
     "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/caddy_config.json",
-    "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/sirtunnel.py"
+    "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/sirtunnel.py",
+    "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/smtp_sink.py",
+    "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/requirements-smtp.txt"
   )
   skipDos2Unix = $false
 }
