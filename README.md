@@ -97,6 +97,7 @@ For detailed documentation, see:
 - [Detailed Technical Documentation](SETUP.md)
 - [Usage Instructions](docs/USAGE.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [MX SMTP Sink Setup](docs/MX-SMTP-SINK.md) - Temporary email server for testing
 
 ## Security Notes
 
