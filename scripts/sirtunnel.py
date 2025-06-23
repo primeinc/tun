@@ -62,14 +62,17 @@ if __name__ == '__main__':
 
     # Open port 25 and start SMTP monitoring
     print("Opening port 25 for SMTP traffic...")
-    subprocess.run(['sudo', 'iptables', '-I', 'INPUT', '-p', 'tcp', '--dport', '25', '-j', 'ACCEPT'], capture_output=True)
+    open_port_result = subprocess.run(['sudo', 'iptables', '-I', 'INPUT', '-p', 'tcp', '--dport', '25', '-j', 'ACCEPT'], capture_output=True, text=True)
+    if open_port_result.returncode != 0:
+        print(f"Error: Failed to open port 25. IPTables command failed: {open_port_result.stderr.strip()}", file=sys.stderr)
+        print("SMTP sink functionality will not be available for this session.", file=sys.stderr)
     
     # Start monitoring SMTP logs in background
     smtp_process = subprocess.Popen(
         ['sudo', 'journalctl', '-u', 'smtpsink.service', '-f', '-n0'],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        universal_newlines=True
+        text=True  # Using text=True instead of deprecated universal_newlines=True
     )
     
     def monitor_smtp():
@@ -92,7 +95,10 @@ if __name__ == '__main__':
             
             # Close port 25 and stop SMTP monitoring
             print("Closing port 25...")
-            subprocess.run(['sudo', 'iptables', '-D', 'INPUT', '-p', 'tcp', '--dport', '25', '-j', 'ACCEPT'], capture_output=True)
+            close_port_result = subprocess.run(['sudo', 'iptables', '-D', 'INPUT', '-p', 'tcp', '--dport', '25', '-j', 'ACCEPT'], capture_output=True, text=True)
+            if close_port_result.returncode != 0:
+                print(f"CRITICAL Error: Failed to close port 25. IPTables command failed: {close_port_result.stderr.strip()}. Port 25 may still be open.", file=sys.stderr)
+                print("Try manually closing with: sudo iptables -D INPUT -p tcp --dport 25 -j ACCEPT", file=sys.stderr)
             smtp_process.terminate()
             
             break

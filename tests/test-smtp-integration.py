@@ -47,7 +47,9 @@ def test_smtp_server_locally():
     # Start the server on port 2525 (no root required)
     server_script = """
 import sys
-sys.path.insert(0, '/mnt/c/Users/WillPeters/dev/tun/scripts')
+import os
+# When running from a string, __file__ isn't defined, so we use the current directory
+sys.path.insert(0, os.path.abspath(os.path.join(os.getcwd(), 'scripts')))
 from smtp_sink import ConsoleHandler
 from aiosmtpd.controller import Controller
 import threading
@@ -105,14 +107,13 @@ controller.stop()
         else:
             print("✗ Could not connect to SMTP server")
             
-    finally:
-        # Stop the server
+    finally:        # Stop the server
         proc.terminate()
         proc.wait(timeout=5)
         stdout, stderr = proc.communicate()
         
-        # Check if server logged our email
-        if "NEW EMAIL" in stdout:
+        # Check if server logged our email - could be in stdout or stderr
+        if "NEW EMAIL" in stdout or "NEW EMAIL" in stderr:
             print("✓ Server logged the email correctly")
         else:
             print("✗ Server did not log the email")

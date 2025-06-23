@@ -93,9 +93,10 @@ run_test "smtp_sink.py in deployment" \
 
 # Test 8: Test signal handling
 echo -e "${CYAN}Testing: Signal handling simulation${NC}"
-cat > /tmp/test_signal.py << 'EOF'
+cat > /tmp/test_signal.py << EOF
 import sys
-sys.path.insert(0, '/mnt/c/Users/WillPeters/dev/tun/scripts')
+import os
+sys.path.insert(0, os.path.join('${PROJECT_ROOT}', 'scripts'))
 import signal
 from smtp_sink import signal_handler
 

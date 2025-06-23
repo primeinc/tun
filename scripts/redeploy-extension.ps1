@@ -46,30 +46,40 @@ if ($invalidArgs) {
 }
 
 # Load deployment config
-Write-Host "[DEBUG] Loading config from: $PSScriptRoot/config.ps1" -ForegroundColor Cyan
 . "$PSScriptRoot/config.ps1"
-Write-Host "[DEBUG] Config loaded, VM_RG_NAME: $VM_RG_NAME" -ForegroundColor Cyan
 
 # Define VM_IP_OVERRIDE if it doesn't exist
 if (-not (Get-Variable -Name VM_IP_OVERRIDE -ErrorAction SilentlyContinue)) {
   $VM_IP_OVERRIDE = $null
 }
 
+# Determine if GITHUB_REPO includes a branch
+$githubRepoBase = $GITHUB_REPO
+$githubBranch = "main"
+
+if ($GITHUB_REPO -match "/(.+)") {
+  $githubRepoBase = $GITHUB_REPO.Substring(0, $GITHUB_REPO.LastIndexOf("/"))
+  $githubBranch = $GITHUB_REPO.Substring($GITHUB_REPO.LastIndexOf("/") + 1)
+  Write-Host "[INFO] Using custom branch: $githubBranch from repo: $githubRepoBase" -ForegroundColor Cyan
+} else {
+  Write-Host "[INFO] Using main branch from repo: $githubRepoBase" -ForegroundColor Cyan
+}
+
 # Build settings and protectedSettings objects
 $settings = @{
   fileUris = @(
-    "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/install.sh",
-    "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/run_server.sh",
-    "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/caddy_config.json",
-    "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/sirtunnel.py",
-    "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/smtp_sink.py",
-    "https://raw.githubusercontent.com/$GITHUB_REPO/main/scripts/requirements-smtp.txt"
+    "https://raw.githubusercontent.com/$githubRepoBase/$githubBranch/scripts/install.sh",
+    "https://raw.githubusercontent.com/$githubRepoBase/$githubBranch/scripts/run_server.sh",
+    "https://raw.githubusercontent.com/$githubRepoBase/$githubBranch/scripts/caddy_config.json",
+    "https://raw.githubusercontent.com/$githubRepoBase/$githubBranch/scripts/sirtunnel.py",
+    "https://raw.githubusercontent.com/$githubRepoBase/$githubBranch/scripts/smtp_sink.py",
+    "https://raw.githubusercontent.com/$githubRepoBase/$githubBranch/scripts/requirements-smtp.txt"
   )
   skipDos2Unix = $false
 }
 
 $protected = @{
-  commandToExecute = "bash install.sh $DNS_ZONE_RG $DNS_ZONE_NAME"
+  commandToExecute = "bash install.sh $(az account show --query id -o tsv) $DNS_ZONE_RG $DNS_ZONE_NAME"
 }
 
 # Check current extension state
@@ -150,15 +160,16 @@ if (Test-Path $utilsPath) {
   Write-Host "[WARN] Utils.ps1 not found. Tunnel state will not be persisted." -ForegroundColor Yellow
 }
 
-try {
-  # Determine the IP address to use in the following priority:
+try {  # Determine the connection info to use in the following priority:
   # 1. IpOverride parameter (if provided)
   # 2. VM_IP_OVERRIDE from config.ps1 (if defined)
   # 3. Existing tunnel info (if available)
-  # 4. Query Azure (if not DryRun)
-  # 5. Use VM_NAME as fallback (if DryRun)
+  # 4. Domain-based approach (tun.$DNS_ZONE_NAME)
+  # 5. Query Azure (if not DryRun)
+  # 6. Use VM_NAME as fallback (if DryRun)
   
   $ipToUse = $null
+  $serverHost = "tun.$DNS_ZONE_NAME"
   
   # Check command line override
   if ($IpOverride) {
@@ -182,53 +193,74 @@ try {
       }
     }
   }
-    # If we still don't have an IP and not in DryRun mode, query Azure
+  # Use domain-based approach if no specific IP is provided
+  elseif ($DNS_ZONE_NAME) {
+    $ipToUse = $serverHost
+    Write-Host "[INFO] Using domain-based connection: $ipToUse" -ForegroundColor Cyan
+  }    # If we still don't have an IP and not in DryRun mode, query Azure
   if (-not $ipToUse -and -not $DryRun) {
-    try {
-      # First try to get the public IP from the VM's network interface
-      $networkInterfaceId = az vm show --resource-group $VM_RG_NAME --name $VM_NAME --query "networkProfile.networkInterfaces[0].id" -o tsv
-      if ($networkInterfaceId) {
-        $publicIpId = az network nic show --ids $networkInterfaceId --query "ipConfigurations[0].publicIpAddress.id" -o tsv
-        if ($publicIpId) {
-          $publicIp = az network public-ip show --ids $publicIpId --query "ipAddress" -o tsv
-          if ($publicIp) {
-            $ipToUse = $publicIp
-            Write-Host "[INFO] Retrieved VM IP from Azure: $ipToUse" -ForegroundColor Cyan
+    # First try the domain-based approach if not explicitly used above
+    if ($DNS_ZONE_NAME -and -not $ipToUse) {
+      $ipToUse = $serverHost
+      Write-Host "[INFO] Using domain-based connection as fallback: $ipToUse" -ForegroundColor Cyan
+    }
+    # Only try to get IP address from Azure if we're not using domain-based approach
+    else {
+      try {
+        # First try to get the public IP from the VM's network interface
+        $networkInterfaceId = az vm show --resource-group $VM_RG_NAME --name $VM_NAME --query "networkProfile.networkInterfaces[0].id" -o tsv
+        if ($networkInterfaceId) {
+          $publicIpId = az network nic show --ids $networkInterfaceId --query "ipConfigurations[0].publicIpAddress.id" -o tsv
+          if ($publicIpId) {
+            $publicIp = az network public-ip show --ids $publicIpId --query "ipAddress" -o tsv
+            if ($publicIp) {
+              $ipToUse = $publicIp
+              Write-Host "[INFO] Retrieved VM IP from Azure: $ipToUse" -ForegroundColor Cyan
+            }
           }
         }
+        
+        # Fallback to the old method if the above didn't work
+        if (-not $ipToUse) {
+          $vmInfo = az vm show --resource-group $VM_RG_NAME --name $VM_NAME --show-details --query "{name:name, publicIps:publicIps}" --output json | ConvertFrom-Json
+          if ($vmInfo -and $vmInfo.publicIps) {
+            $ipToUse = $vmInfo.publicIps
+            Write-Host "[INFO] Retrieved VM IP from Azure: $ipToUse" -ForegroundColor Cyan
+          } else {
+            Write-Warning "Could not retrieve VM IP from Azure using show-details"
+          }
+        }
+      } catch {
+        Write-Warning "Error retrieving VM IP from Azure: $($_.Exception.Message)"
       }
       
-      # Fallback to the old method if the above didn't work
+      # Verify we got a valid IP address and not just the VM name
+      if ($ipToUse -and $ipToUse -eq $VM_NAME) {
+        Write-Warning "Retrieved IP matches VM name, which is likely incorrect"
+        $ipToUse = $null
+      }
+      
+      # If we still don't have an IP address, use domain-based approach or prompt the user
       if (-not $ipToUse) {
-        $vmInfo = az vm show --resource-group $VM_RG_NAME --name $VM_NAME --show-details --query "{name:name, publicIps:publicIps}" --output json | ConvertFrom-Json
-        if ($vmInfo -and $vmInfo.publicIps) {
-          $ipToUse = $vmInfo.publicIps
-          Write-Host "[INFO] Retrieved VM IP from Azure: $ipToUse" -ForegroundColor Cyan
+        if ($DNS_ZONE_NAME) {
+          $ipToUse = $serverHost
+          Write-Host "[INFO] Falling back to domain-based connection: $ipToUse" -ForegroundColor Cyan
         } else {
-          Write-Warning "Could not retrieve VM IP from Azure using show-details"
+          Write-Host "[WARN] Could not automatically determine VM IP address and no DNS_ZONE_NAME is set" -ForegroundColor Yellow
+          $ipToUse = Read-Host "Please enter the VM's public IP address"
         }
       }
-    } catch {
-      Write-Warning "Error retrieving VM IP from Azure: $($_.Exception.Message)"
-    }
-    
-    # Verify we got a valid IP address and not just the VM name
-    if ($ipToUse -and $ipToUse -eq $VM_NAME) {
-      Write-Warning "Retrieved IP matches VM name, which is likely incorrect"
-      $ipToUse = $null
-    }
-    
-    # If we still don't have an IP address, prompt the user
-    if (-not $ipToUse) {
-      Write-Host "[WARN] Could not automatically determine VM IP address" -ForegroundColor Yellow
-      $ipToUse = Read-Host "Please enter the VM's public IP address"
     }
   }
-  
-  # Final fallback for DryRun mode
+    # Final fallback for DryRun mode
   if (-not $ipToUse -and $DryRun) {
-    $ipToUse = $VM_NAME
-    Write-Host "[DRY RUN] Using VM name as placeholder IP: $ipToUse" -ForegroundColor Yellow
+    if ($DNS_ZONE_NAME) {
+      $ipToUse = $serverHost
+      Write-Host "[DRY RUN] Using domain-based connection: $ipToUse" -ForegroundColor Yellow
+    } else {
+      $ipToUse = $VM_NAME
+      Write-Host "[DRY RUN] Using VM name as placeholder: $ipToUse" -ForegroundColor Yellow
+    }
     Write-Host "[TIP] To use a specific IP, add VM_IP_OVERRIDE='your.ip.address' to config.ps1" -ForegroundColor Yellow
     Write-Host "[TIP] Or use -IpOverride parameter: -DryRun -IpOverride '1.2.3.4'" -ForegroundColor Yellow
   }
@@ -251,17 +283,26 @@ try {
     
     # Initialize the tunnel directory with appropriate permissions
     $tunDir = Initialize-TunnelEnvironment -SkipSecurePermissions:(-not $hasSecurityPrivilege)
-    $modulePath = Join-Path $PSScriptRoot "TunModule.psm1"
-
-    if (Test-Path $utilsPath) {
+    $modulePath = Join-Path $PSScriptRoot "TunModule.psm1"    if (Test-Path $utilsPath) {
       $tunnelInfo = if (Test-Path "$HOME/.tun/last.json") { Get-TunnelInfo -Silent } else { @{} }
-      $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "vmIp" -NotePropertyValue $vmInfo.publicIps -Force -PassThru
+      
+      # Use domain name as the primary identifier instead of IP when possible
+      if ($DNS_ZONE_NAME -and $ipToUse -eq $serverHost) {
+        # Store the domain name when using domain-based approach
+        $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "vmIp" -NotePropertyValue $serverHost -Force -PassThru
+      } else {
+        # Otherwise store the actual IP address
+        $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "vmIp" -NotePropertyValue $vmInfo.publicIps -Force -PassThru
+      }
+      
       $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "user" -NotePropertyValue $ADMIN_USER -Force -PassThru
+      $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "domain" -NotePropertyValue $DNS_ZONE_NAME -Force -PassThru
       $tunnelInfo = $tunnelInfo | Add-Member -NotePropertyName "updated" -NotePropertyValue (Get-Date).ToString("o") -Force -PassThru
       
       # Pass the security privilege information to Save-TunnelInfo
       Save-TunnelInfo -Info $tunnelInfo -SkipSecurePermissions:(-not $hasSecurityPrivilege)
       
+      # Set environment variable for backward compatibility
       $env:LAST_TUNNEL_VM = $vmInfo.publicIps
     }
 
@@ -286,15 +327,22 @@ try {
     } catch {
       Write-Warning "Could not update module files: $($_.Exception.Message)"
     }
-    
-    # Create or update tunnel config
+      # Create or update tunnel config
     try {
       $configPath = "$tunDir/config.json"
       $config = if (Test-Path $configPath) { Get-Content $configPath | ConvertFrom-Json } else { @{} }
       $config.Domain = "$DNS_ZONE_NAME"
       $config.AdminUser = "$ADMIN_USER"
-      $config.LastVmIp = "$($vmInfo.publicIps)"
+      
+      # Use domain-based host when possible, otherwise use IP
+      if ($DNS_ZONE_NAME -and $ipToUse -eq $serverHost) {
+        $config.LastVmIp = "$serverHost"
+      } else {
+        $config.LastVmIp = "$($vmInfo.publicIps)"
+      }
+      
       $config | ConvertTo-Json | Set-Content $configPath
+      Write-Host "[INFO] Updated tunnel configuration at $configPath" -ForegroundColor Green
     } catch {
       Write-Warning "Could not update config file: $($_.Exception.Message)"
     }
@@ -344,11 +392,15 @@ try {
       Write-Host "`n[MANUAL FIX REQUIRED]" -ForegroundColor Magenta
       Write-Host "To enable 'tun' in future sessions, run this command once:" -ForegroundColor Green
       Write-Host "`n  Add-Content -Path `"$PROFILE`" -Value 'Import-Module `"$tunDir/TunModule.psm1`"'" -ForegroundColor Yellow
-    }
-
-    Write-Host "`n[SUMMARY]" -ForegroundColor Cyan
+    }    Write-Host "`n[SUMMARY]" -ForegroundColor Cyan
     Write-Host "Tunnel module path: $tunDir" -ForegroundColor DarkCyan
-    Write-Host "VM IP: $($vmInfo.publicIps)" -ForegroundColor Cyan
+    
+    if ($DNS_ZONE_NAME -and $ipToUse -eq $serverHost) {
+      Write-Host "Connection: $serverHost (domain-based)" -ForegroundColor Cyan
+    } else {
+      Write-Host "VM IP: $($vmInfo.publicIps)" -ForegroundColor Cyan
+    }
+    
     Write-Host "`nTo use SirTunnel immediately, run:" -ForegroundColor Green
     Write-Host "  Import-Module `"$tunDir/TunModule.psm1`"" -ForegroundColor Yellow
     Write-Host "`nExample commands:" -ForegroundColor Green

@@ -66,8 +66,17 @@ if __name__ == '__main__':
         controller.start()
         logger.info("SMTP sink server started on port 25")
         
-        # Run the event loop
-        asyncio.get_event_loop().run_forever()
+        # Use modern asyncio approach
+        async def run_server():
+            # Keep the server running until interrupted
+            try:
+                while True:
+                    await asyncio.sleep(3600)  # Sleep for long periods, waking up to handle signals
+            except asyncio.CancelledError:
+                pass
+        
+        # Run the event loop with the modern approach
+        asyncio.run(run_server())
     except Exception as e:
         logger.error(f"Failed to start SMTP server: {e}")
         sys.exit(1)
